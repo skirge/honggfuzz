@@ -1,4 +1,4 @@
-FROM ubuntu:rolling
+FROM i386/ubuntu
 
 RUN apt-get -y update && apt-get install -y \
     gcc \
@@ -10,8 +10,9 @@ RUN apt-get -y update && apt-get install -y \
 	binutils-dev \
 && rm -rf /var/lib/apt/lists/* && rm -rf /honggfuzz
 
-RUN git clone --depth=1 https://github.com/google/honggfuzz.git
+RUN git clone -n --depth=1 https://github.com/skirge/honggfuzz.git
 
 WORKDIR /honggfuzz
 
-RUN make && cp /honggfuzz/honggfuzz /bin
+RUN	git checkout 85e7a43a02d50f3a04b36d766346481332168532 && make && cp /honggfuzz/honggfuzz /bin
+
