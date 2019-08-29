@@ -208,7 +208,7 @@ static void printSummary(honggfuzz_t* hfuzz) {
         PLOG_W("getrusage  failed");
         usage.ru_maxrss = 0;  // 0 means something went wrong with rusage
     }
-    LOG_I("Summary iterations:%zu time:%" PRIu64 " speed:%" PRIu64 " "
+    LOG_I("Summary iterations:%lu time:%" PRIu64 " speed:%" PRIu64 " "
           "crashes_count:%zu timeout_count:%zu new_units_added:%zu "
           "slowest_unit_ms:%" PRId64 " guard_nb:%" PRIu64 " branch_coverage_percent:%" PRIu64 " "
           "peak_rss_mb:%zu",
