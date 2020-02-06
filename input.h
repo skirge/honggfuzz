@@ -24,17 +24,24 @@
 #ifndef _HF_INPUT_H_
 #define _HF_INPUT_H_
 
+#include <limits.h>
+
 #include "honggfuzz.h"
 
 extern void input_setSize(run_t* run, size_t sz);
-extern bool input_getNext(run_t* run, char* fname, bool rewind);
+extern bool input_getNext(run_t* run, char fname[PATH_MAX], bool rewind);
 extern bool input_init(honggfuzz_t* hfuzz);
 extern bool input_parseDictionary(honggfuzz_t* hfuzz);
+extern void input_freeDictionary(honggfuzz_t* hfuzz);
 extern bool input_parseBlacklist(honggfuzz_t* hfuzz);
-extern bool input_prepareDynamicInput(run_t* run, bool need_mangele);
-extern bool input_prepareStaticFile(run_t* run, bool rewind, bool need_mangele);
+extern bool input_writeCovFile(const char* dir, const uint8_t* data, size_t len);
+extern void input_addDynamicInput(
+    honggfuzz_t* hfuzz, const uint8_t* data, size_t len, uint64_t cov[4], const char* path);
+extern bool input_prepareDynamicInput(run_t* run, bool needs_mangle);
+extern bool input_prepareStaticFile(run_t* run, bool rewind, bool needs_mangle);
+extern void input_removeStaticFile(const char* dir, const char* name);
 extern bool input_prepareExternalFile(run_t* run);
-extern bool input_postProcessFile(run_t* run);
-extern bool input_feedbackMutateFile(run_t* run);
+extern bool input_postProcessFile(run_t* run, const char* cmd);
+extern bool input_prepareDynamicFileForMinimization(run_t* run);
 
 #endif /* ifndef _HF_INPUT_H_ */

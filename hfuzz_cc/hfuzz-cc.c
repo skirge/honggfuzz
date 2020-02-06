@@ -103,9 +103,6 @@ static bool isLDMode(int argc, char** argv) {
         if (strcmp(argv[i], "-S") == 0) {
             return false;
         }
-        if (strcmp(argv[i], "-shared") == 0) {
-            return false;
-        }
     }
     return true;
 }
@@ -304,16 +301,16 @@ static void commonOpts(int* j, char** args) {
     if (isGCC) {
         if (useBelowGCC8()) {
             /* trace-pc is the best that gcc-6/7 currently offers */
-            args[(*j)++] = "-fsanitize-coverage=trace-pc,trace-cmp";
+            args[(*j)++] = "-fsanitize-coverage=trace-pc";
         } else {
             /* gcc-8+ offers trace-cmp as well, but it's not that widely used yet */
-            args[(*j)++] = "-fsanitize-coverage=trace-pc";
+            args[(*j)++] = "-fsanitize-coverage=trace-pc,trace-cmp";
         }
     } else {
         args[(*j)++] = "-Wno-unused-command-line-argument";
         args[(*j)++] = "-fsanitize-coverage=trace-pc-guard,trace-cmp,trace-div,indirect-calls";
         args[(*j)++] = "-mllvm";
-        args[(*j)++] = "-sanitizer-coverage-level=3";
+        args[(*j)++] = "-sanitizer-coverage-prune-blocks=1";
     }
 
     /*
@@ -438,6 +435,13 @@ static int ldMode(int argc, char** argv) {
 
     /* Needed by the libhfcommon */
     args[j++] = "-pthread";
+    args[j++] = "-ldl";
+#if !defined(_HF_ARCH_DARWIN) && !defined(__OpenBSD__)
+    args[j++] = "-lrt";
+#endif /* !defined(_HF_ARCH_DARWIN) && !defined(__OpenBSD__) */
+#if defined(__ANDROID__)
+    args[j++] = "-latomic";
+#endif
 
     /* Disable -fsanitize=fuzzer */
     if (isFSanitizeFuzzer(argc, argv)) {

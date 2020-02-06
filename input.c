@@ -37,22 +37,18 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "fuzz.h"
 #include "libhfcommon/common.h"
 #include "libhfcommon/files.h"
+#include "libhfcommon/log.h"
+#include "libhfcommon/util.h"
 #include "mangle.h"
 #include "subproc.h"
 
-#if defined(_HF_ARCH_LINUX)
-#include <sys/syscall.h>
-#if defined(__NR_memfd_create)
-#include <linux/memfd.h>
-#endif /* defined(__NR_memfd_create) */
-#endif /* defined(_HF_ARCH_LINUX) */
-
-#include "libhfcommon/log.h"
-#include "libhfcommon/util.h"
-
 void input_setSize(run_t* run, size_t sz) {
+    if (run->dynamicFileSz == sz) {
+        return;
+    }
     if (sz > run->global->mutate.maxFileSz) {
         PLOG_F("Too large size requested: %zu > maxSize: %zu", sz, run->global->mutate.maxFileSz);
     }
@@ -84,22 +80,23 @@ static bool input_getDirStatsAndRewind(honggfuzz_t* hfuzz) {
             break;
         }
 
-        char fname[PATH_MAX];
-        snprintf(fname, sizeof(fname), "%s/%s", hfuzz->io.inputDir, entry->d_name);
-        LOG_D("Analyzing file '%s'", fname);
+        char path[PATH_MAX];
+        snprintf(path, sizeof(path), "%s/%s", hfuzz->io.inputDir, entry->d_name);
+
+        LOG_D("Analyzing file '%s'", path);
 
         struct stat st;
-        if (stat(fname, &st) == -1) {
-            LOG_W("Couldn't stat() the '%s' file", fname);
+        if (stat(path, &st) == -1) {
+            LOG_W("Couldn't stat() the '%s' file", path);
             continue;
         }
         if (!S_ISREG(st.st_mode)) {
-            LOG_D("'%s' is not a regular file, skipping", fname);
+            LOG_D("'%s' is not a regular file, skipping", path);
             continue;
         }
         if (hfuzz->mutate.maxFileSz != 0UL && st.st_size > (off_t)hfuzz->mutate.maxFileSz) {
             LOG_D("File '%s' is bigger than maximal defined file size (-F): %" PRId64 " > %" PRId64,
-                fname, (int64_t)st.st_size, (int64_t)hfuzz->mutate.maxFileSz);
+                path, (int64_t)st.st_size, (int64_t)hfuzz->mutate.maxFileSz);
         }
         if ((size_t)st.st_size > maxSize) {
             maxSize = st.st_size;
@@ -122,7 +119,7 @@ static bool input_getDirStatsAndRewind(honggfuzz_t* hfuzz) {
         LOG_W("No usable files in the input directory '%s'", hfuzz->io.inputDir);
     }
 
-    LOG_D("Re-read the '%s', maxFileSz:%zu, number of usable files:%zu", hfuzz->io.inputDir,
+    LOG_D("Analyzed '%s' directory: maxFileSz:%zu, number of usable files:%zu", hfuzz->io.inputDir,
         hfuzz->mutate.maxFileSz, hfuzz->io.fileCnt);
 
     rewinddir(hfuzz->io.inputDirPtr);
@@ -130,7 +127,7 @@ static bool input_getDirStatsAndRewind(honggfuzz_t* hfuzz) {
     return true;
 }
 
-bool input_getNext(run_t* run, char* fname, bool rewind) {
+bool input_getNext(run_t* run, char fname[PATH_MAX], bool rewind) {
     static pthread_mutex_t input_mutex = PTHREAD_MUTEX_INITIALIZER;
     MX_SCOPED_LOCK(&input_mutex);
 
@@ -159,18 +156,19 @@ bool input_getNext(run_t* run, char* fname, bool rewind) {
             }
             continue;
         }
-
-        snprintf(fname, PATH_MAX, "%s/%s", run->global->io.inputDir, entry->d_name);
-
+        char path[PATH_MAX];
+        snprintf(path, PATH_MAX, "%s/%s", run->global->io.inputDir, entry->d_name);
         struct stat st;
-        if (stat(fname, &st) == -1) {
-            LOG_W("Couldn't stat() the '%s' file", fname);
+        if (stat(path, &st) == -1) {
+            LOG_W("Couldn't stat() the '%s' file", path);
             continue;
         }
         if (!S_ISREG(st.st_mode)) {
-            LOG_D("'%s' is not a regular file, skipping", fname);
+            LOG_D("'%s' is not a regular file, skipping", path);
             continue;
         }
+
+        snprintf(fname, PATH_MAX, "%s", entry->d_name);
         return true;
     }
 }
@@ -189,8 +187,8 @@ bool input_init(honggfuzz_t* hfuzz) {
         return false;
     }
     if ((hfuzz->io.inputDirPtr = fdopendir(dir_fd)) == NULL) {
+        PLOG_W("fdopendir(dir='%s', fd=%d)", hfuzz->io.inputDir, dir_fd);
         close(dir_fd);
-        PLOG_W("opendir('%s')", hfuzz->io.inputDir);
         return false;
     }
     if (input_getDirStatsAndRewind(hfuzz) == false) {
@@ -203,6 +201,8 @@ bool input_init(honggfuzz_t* hfuzz) {
 }
 
 bool input_parseDictionary(honggfuzz_t* hfuzz) {
+    LOG_I("Parsing dictionary file '%s'", hfuzz->mutate.dictionaryFile);
+
     FILE* fDict = fopen(hfuzz->mutate.dictionaryFile, "rb");
     if (fDict == NULL) {
         PLOG_W("Couldn't open '%s' - R/O mode", hfuzz->mutate.dictionaryFile);
@@ -235,27 +235,36 @@ bool input_parseDictionary(honggfuzz_t* hfuzz) {
         if (lineptr[0] == '\0') {
             continue;
         }
-        char bufn[1025] = {};
         char bufv[1025] = {};
-        if (sscanf(lineptr, "\"%1024s", bufv) != 1 &&
-            sscanf(lineptr, "%1024[^=]=\"%1024s", bufn, bufv) != 2) {
+        if (sscanf(lineptr, "\"%1024[^\"]", bufv) != 1 &&
+            sscanf(lineptr, "%*1024[^=]=\"%1024[^\"]", bufv) != 1) {
             LOG_W("Incorrect dictionary entry: '%s'. Skipping", lineptr);
             continue;
         }
 
-        LOG_D("Parsing word: '%s'", bufv);
+        LOG_D("Parsing dictionary word: '%s'", bufv);
 
-        char* s = util_StrDup(bufv);
-        struct strings_t* str = (struct strings_t*)util_Malloc(sizeof(struct strings_t));
-        str->len = util_decodeCString(s);
-        str->s = s;
-        hfuzz->mutate.dictionaryCnt += 1;
+        len = util_decodeCString(bufv);
+        struct strings_t* str = (struct strings_t*)util_Calloc(sizeof(struct strings_t) + len + 1);
+        memcpy(str->s, bufv, len);
+        str->len = len;
+        hfuzz->mutate.dictionaryCnt++;
         TAILQ_INSERT_TAIL(&hfuzz->mutate.dictq, str, pointers);
 
         LOG_D("Dictionary: loaded word: '%s' (len=%zu)", str->s, str->len);
     }
-    LOG_I("Loaded %zu words from the dictionary", hfuzz->mutate.dictionaryCnt);
+    LOG_I("Loaded %zu words from the dictionary '%s'", hfuzz->mutate.dictionaryCnt,
+        hfuzz->mutate.dictionaryFile);
     return true;
+}
+
+void input_freeDictionary(honggfuzz_t* hfuzz) {
+    while (!TAILQ_EMPTY(&hfuzz->mutate.dictq)) {
+        struct strings_t* str = TAILQ_FIRST(&hfuzz->mutate.dictq);
+        TAILQ_REMOVE(&hfuzz->mutate.dictq, str, pointers);
+        free(str);
+        hfuzz->mutate.dictionaryCnt--;
+    }
 }
 
 bool input_parseBlacklist(honggfuzz_t* hfuzz) {
@@ -311,50 +320,155 @@ bool input_parseBlacklist(honggfuzz_t* hfuzz) {
     return true;
 }
 
-bool input_prepareDynamicInput(run_t* run, bool need_mangele) {
-    {
-        MX_SCOPED_RWLOCK_READ(&run->global->io.dynfileq_mutex);
+bool input_writeCovFile(const char* dir, const uint8_t* data, size_t len) {
+    char fname[PATH_MAX];
 
-        if (run->global->io.dynfileqCnt == 0) {
-            LOG_F("The dynamic file corpus is empty. This shouldn't happen");
-        }
+    uint64_t crc64f = util_CRC64(data, len);
+    uint64_t crc64r = util_CRC64Rev(data, len);
+    snprintf(fname, sizeof(fname), "%s/%016" PRIx64 "%016" PRIx64 ".%08" PRIx32 ".honggfuzz.cov",
+        dir, crc64f, crc64r, (uint32_t)len);
 
-        if (run->dynfileqCurrent == NULL) {
-            run->dynfileqCurrent = TAILQ_FIRST(&run->global->io.dynfileq);
-        } else {
-            if (run->dynfileqCurrent == TAILQ_LAST(&run->global->io.dynfileq, dyns_t)) {
-                run->dynfileqCurrent = TAILQ_FIRST(&run->global->io.dynfileq);
-            } else {
-                run->dynfileqCurrent = TAILQ_NEXT(run->dynfileqCurrent, pointers);
-            }
-        }
+    if (files_exists(fname)) {
+        LOG_D("File '%s' already exists in the output corpus directory '%s'", fname, dir);
+        return true;
     }
 
-    input_setSize(run, run->dynfileqCurrent->size);
-    memcpy(run->dynamicFile, run->dynfileqCurrent->data, run->dynfileqCurrent->size);
-    if (need_mangele) mangle_mangleContent(run);
+    LOG_D("Adding file '%s' to the corpus directory '%s'", fname, dir);
+
+    if (!files_writeBufToFile(fname, data, len, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC)) {
+        LOG_W("Couldn't write buffer to file '%s'", fname);
+        return false;
+    }
 
     return true;
 }
 
-bool input_prepareStaticFile(run_t* run, bool rewind, bool need_mangele) {
-    char fname[PATH_MAX];
-    if (!input_getNext(run, fname, /* rewind= */ rewind)) {
+/* true if item1 is bigger than item2 */
+static bool input_cmpCov(struct dynfile_t* item1, struct dynfile_t* item2) {
+    for (size_t j = 0; j < ARRAYSIZE(item1->cov); j++) {
+        if (item1->cov[j] > item2->cov[j]) {
+            return true;
+        }
+        if (item1->cov[j] < item2->cov[j]) {
+            return false;
+        }
+    }
+    /* Both are equal */
+    return false;
+}
+
+#define TAILQ_FOREACH_HF(var, head, field) \
+    for ((var) = TAILQ_FIRST((head)); (var); (var) = TAILQ_NEXT((var), field))
+
+void input_addDynamicInput(
+    honggfuzz_t* hfuzz, const uint8_t* data, size_t len, uint64_t cov[4], const char* path) {
+    ATOMIC_SET(hfuzz->timing.lastCovUpdate, time(NULL));
+
+    struct dynfile_t* dynfile = (struct dynfile_t*)util_Malloc(sizeof(struct dynfile_t) + len);
+    for (size_t i = 0; i < ARRAYSIZE(dynfile->cov); i++) {
+        dynfile->cov[i] = cov[i];
+    }
+    dynfile->size = len;
+    memcpy(dynfile->data, data, len);
+    snprintf(dynfile->path, sizeof(dynfile->path), "%s", path);
+
+    MX_SCOPED_RWLOCK_WRITE(&hfuzz->io.dynfileq_mutex);
+
+    /* Sort it by coverage - put better coverage in front of the list */
+    struct dynfile_t* iter = NULL;
+    TAILQ_FOREACH_HF(iter, &hfuzz->io.dynfileq, pointers) {
+        if (input_cmpCov(dynfile, iter)) {
+            TAILQ_INSERT_BEFORE(iter, dynfile, pointers);
+            break;
+        }
+    }
+    if (iter == NULL) {
+        TAILQ_INSERT_TAIL(&hfuzz->io.dynfileq, dynfile, pointers);
+    }
+    hfuzz->io.dynfileqCnt++;
+
+    if (hfuzz->socketFuzzer.enabled) {
+        /* Don't add coverage data to files in socketFuzzer mode */
+        return;
+    }
+    if (hfuzz->cfg.minimize) {
+        /* When minimizing we should only delete files */
+        return;
+    }
+
+    const char* outDir = hfuzz->io.outputDir ? hfuzz->io.outputDir : hfuzz->io.inputDir;
+    if (!input_writeCovFile(outDir, data, len)) {
+        LOG_E("Couldn't save the coverage data to '%s'", hfuzz->io.outputDir);
+    }
+
+    /* No need to add files to the new coverage dir, if it's not the main phase */
+    if (fuzz_getState(hfuzz) != _HF_STATE_DYNAMIC_MAIN) {
+        return;
+    }
+
+    hfuzz->io.newUnitsAdded++;
+
+    if (hfuzz->io.covDirNew && !input_writeCovFile(hfuzz->io.covDirNew, data, len)) {
+        LOG_E("Couldn't save the new coverage data to '%s'", hfuzz->io.covDirNew);
+    }
+}
+
+bool input_prepareDynamicInput(run_t* run, bool needs_mangle) {
+    struct dynfile_t* current = NULL;
+
+    if (ATOMIC_GET(run->global->io.dynfileqCnt) == 0) {
+        LOG_F("The dynamic file corpus is empty. This shouldn't happen");
+    }
+
+    {
+        MX_SCOPED_RWLOCK_WRITE(&run->global->io.dynfileq_mutex);
+
+        if (run->global->io.dynfileqCurrent == NULL) {
+            run->global->io.dynfileqCurrent = TAILQ_FIRST(&run->global->io.dynfileq);
+        }
+        current = run->global->io.dynfileqCurrent;
+        run->global->io.dynfileqCurrent = TAILQ_NEXT(run->global->io.dynfileqCurrent, pointers);
+    }
+
+    input_setSize(run, current->size);
+    memcpy(run->dynamicFile, current->data, current->size);
+
+    if (needs_mangle) {
+        mangle_mangleContent(run);
+    }
+
+    return true;
+}
+
+bool input_prepareStaticFile(run_t* run, bool rewind, bool needs_mangle) {
+    if (!input_getNext(run, run->origFileName, /* rewind= */ rewind)) {
         return false;
     }
-    snprintf(run->origFileName, sizeof(run->origFileName), "%s", fname);
-
     input_setSize(run, run->global->mutate.maxFileSz);
-    ssize_t fileSz = files_readFileToBufMax(fname, run->dynamicFile, run->global->mutate.maxFileSz);
+
+    char path[PATH_MAX];
+    snprintf(path, sizeof(path), "%s/%s", run->global->io.inputDir, run->origFileName);
+
+    ssize_t fileSz = files_readFileToBufMax(path, run->dynamicFile, run->global->mutate.maxFileSz);
     if (fileSz < 0) {
-        LOG_E("Couldn't read contents of '%s'", fname);
+        LOG_E("Couldn't read contents of '%s'", path);
         return false;
     }
 
     input_setSize(run, fileSz);
-    if (need_mangele) mangle_mangleContent(run);
+    if (needs_mangle) {
+        mangle_mangleContent(run);
+    }
 
     return true;
+}
+
+void input_removeStaticFile(const char* dir, const char* name) {
+    char path[PATH_MAX];
+    snprintf(path, sizeof(path), "%s/%s", dir, name);
+    if (unlink(path) == -1) {
+        PLOG_E("unlink('%s') failed", path);
+    }
 }
 
 bool input_prepareExternalFile(run_t* run) {
@@ -390,7 +504,7 @@ bool input_prepareExternalFile(run_t* run) {
     return true;
 }
 
-bool input_postProcessFile(run_t* run) {
+bool input_postProcessFile(run_t* run, const char* cmd) {
     int fd =
         files_writeBufToTmpFile(run->global->io.workDir, run->dynamicFile, run->dynamicFileSz, 0);
     if (fd == -1) {
@@ -404,12 +518,12 @@ bool input_postProcessFile(run_t* run) {
     char fname[PATH_MAX];
     snprintf(fname, sizeof(fname), "/dev/fd/%d", fd);
 
-    const char* const argv[] = {run->global->exe.postExternalCommand, fname, NULL};
+    const char* const argv[] = {cmd, fname, NULL};
     if (subproc_System(run, argv) != 0) {
-        LOG_E("Subprocess '%s' returned abnormally", run->global->exe.postExternalCommand);
+        LOG_E("Subprocess '%s' returned abnormally", cmd);
         return false;
     }
-    LOG_D("Subporcess '%s' finished with success", run->global->exe.externalCommand);
+    LOG_D("Subporcess '%s' finished with success", cmd);
 
     input_setSize(run, run->global->mutate.maxFileSz);
     ssize_t sz = files_readFromFdSeek(fd, run->dynamicFile, run->global->mutate.maxFileSz, 0);
@@ -422,34 +536,31 @@ bool input_postProcessFile(run_t* run) {
     return true;
 }
 
-bool input_feedbackMutateFile(run_t* run) {
-    int fd =
-        files_writeBufToTmpFile(run->global->io.workDir, run->dynamicFile, run->dynamicFileSz, 0);
-    if (fd == -1) {
-        LOG_E("Couldn't write input file to a temporary buffer");
-        return false;
+bool input_prepareDynamicFileForMinimization(run_t* run) {
+    MX_SCOPED_RWLOCK_WRITE(&run->global->io.dynfileq_mutex);
+
+    if (run->global->io.dynfileqCnt == 0) {
+        LOG_F("The dynamic file corpus is empty (for minimization). This shouldn't happen");
     }
-    defer {
-        close(fd);
-    };
 
-    char fname[PATH_MAX];
-    snprintf(fname, sizeof(fname), "/dev/fd/%d", fd);
-
-    const char* const argv[] = {run->global->exe.feedbackMutateCommand, fname, NULL};
-    if (subproc_System(run, argv) != 0) {
-        LOG_E("Subprocess '%s' returned abnormally", run->global->exe.feedbackMutateCommand);
-        return false;
+    if (run->global->io.dynfileqCurrent == NULL) {
+        run->global->io.dynfileqCurrent = TAILQ_FIRST(&run->global->io.dynfileq);
+    } else {
+        run->global->io.dynfileqCurrent = TAILQ_NEXT(run->global->io.dynfileqCurrent, pointers);
     }
-    LOG_D("Subporcess '%s' finished with success", run->global->exe.externalCommand);
-
-    input_setSize(run, run->global->mutate.maxFileSz);
-    ssize_t sz = files_readFromFdSeek(fd, run->dynamicFile, run->global->mutate.maxFileSz, 0);
-    if (sz == -1) {
-        LOG_E("Couldn't read file from fd=%d", fd);
+    if (run->global->io.dynfileqCurrent == NULL) {
         return false;
     }
 
-    input_setSize(run, (size_t)sz);
+    input_setSize(run, run->global->io.dynfileqCurrent->size);
+    memcpy(run->dynamicFile, run->global->io.dynfileqCurrent->data,
+        run->global->io.dynfileqCurrent->size);
+    snprintf(
+        run->origFileName, sizeof(run->origFileName), "%s", run->global->io.dynfileqCurrent->path);
+
+    LOG_D("Cov: %" PRIu64 "/%" PRIu64 "/%" PRIu64 "/%" PRIu64,
+        run->global->io.dynfileqCurrent->cov[0], run->global->io.dynfileqCurrent->cov[1],
+        run->global->io.dynfileqCurrent->cov[2], run->global->io.dynfileqCurrent->cov[3]);
+
     return true;
 }

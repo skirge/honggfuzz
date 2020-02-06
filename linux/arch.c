@@ -122,6 +122,13 @@ bool arch_launchChild(run_t* run) {
         return false;
     }
 
+    /* Increase our OOM score, so fuzzed processes die faster */
+    static const char score100[] = "+500";
+    if (!files_writeBufToFile(
+            "/proc/self/oom_score_adj", (uint8_t*)score100, strlen(score100), O_WRONLY)) {
+        LOG_W("Couldn't increase our oom_score");
+    }
+
     /*
      * Disable ASLR:
      * This might fail in Docker, as Docker blocks __NR_personality. Consequently
@@ -132,29 +139,6 @@ bool arch_launchChild(run_t* run) {
         PLOG_D("personality(ADDR_NO_RANDOMIZE) failed");
     }
 
-#define ARGS_MAX 512
-    const char* args[ARGS_MAX + 2];
-    char argData[PATH_MAX];
-    const char inputFile[] = "/dev/fd/" HF_XSTR(_HF_INPUT_FD);
-
-    int x = 0;
-    for (x = 0; x < ARGS_MAX && x < run->global->exe.argc; x++) {
-        if (!strcmp(run->global->exe.cmdline[x], _HF_FILE_PLACEHOLDER)) {
-            args[x] = inputFile;
-        } else if (strstr(run->global->exe.cmdline[x], _HF_FILE_PLACEHOLDER)) {
-            const char* off = strstr(run->global->exe.cmdline[x], _HF_FILE_PLACEHOLDER);
-            snprintf(argData, sizeof(argData), "%.*s%s", (int)(off - run->global->exe.cmdline[x]),
-                run->global->exe.cmdline[x], inputFile);
-            args[x] = argData;
-        } else {
-            args[x] = run->global->exe.cmdline[x];
-        }
-    }
-    args[x++] = NULL;
-
-    LOG_D("Launching '%s' on file '%s'", args[0],
-        run->global->exe.persistent ? "PERSISTENT_MODE" : inputFile);
-
     /* alarms persist across execve(), so disable it here */
     alarm(0);
 
@@ -163,13 +147,13 @@ bool arch_launchChild(run_t* run) {
         LOG_F("Couldn't stop itself");
     }
 #if defined(__NR_execveat)
-    syscall(__NR_execveat, run->global->linux.exeFd, "", args, environ, AT_EMPTY_PATH);
+    syscall(__NR_execveat, run->global->linux.exeFd, "", run->args, environ, AT_EMPTY_PATH);
 #endif /* defined__NR_execveat) */
-    execve(args[0], (char* const*)args, environ);
+    execve(run->args[0], (char* const*)run->args, environ);
     int errno_cpy = errno;
     alarm(1);
 
-    LOG_E("execve('%s', fd=%d): %s", args[0], run->global->linux.exeFd, strerror(errno_cpy));
+    LOG_E("execve('%s', fd=%d): %s", run->args[0], run->global->linux.exeFd, strerror(errno_cpy));
 
     return false;
 }
@@ -261,12 +245,12 @@ void arch_reapChild(run_t* run) {
 
         const struct timespec ts = {
             .tv_sec = 0ULL,
-            .tv_nsec = (1000ULL * 1000ULL * 250ULL),
+            .tv_nsec = (1000ULL * 1000ULL * 100ULL),
         };
-        /* Return with SIGIO, SIGCHLD and with SIGUSR1 */
-        int sig = sigtimedwait(&run->global->exe.waitSigSet, NULL, &ts /* 0.25s */);
+        /* Return with SIGIO, SIGCHLD */
+        int sig = sigtimedwait(&run->global->exe.waitSigSet, NULL, &ts /* 0.1s */);
         if (sig == -1 && (errno != EAGAIN && errno != EINTR)) {
-            PLOG_F("sigwaitinfo(SIGIO|SIGCHLD|SIGUSR1)");
+            PLOG_F("sigwaitinfo(SIGIO|SIGCHLD)");
         }
 
         if (arch_checkWait(run)) {
@@ -276,21 +260,6 @@ void arch_reapChild(run_t* run) {
         if (run->global->socketFuzzer.enabled) {
             // Do not wait for new events
             break;
-        }
-    }
-    if (run->global->sanitizer.enable) {
-        char crashReport[PATH_MAX];
-        snprintf(crashReport, sizeof(crashReport), "%s/%s.%d", run->global->io.workDir, kLOGPREFIX,
-            run->pid);
-        if (files_exists(crashReport)) {
-            if (run->backtrace) {
-                unlink(crashReport);
-            } else {
-                LOG_W("Un-handled ASan report due to compiler-rt internal error - retry with '%s'",
-                    crashReport);
-                /* Try to parse report file */
-                arch_traceExitAnalyze(run, run->pid);
-            }
         }
     }
 
@@ -400,15 +369,6 @@ bool arch_archInit(honggfuzz_t* hfuzz) {
     /* Updates the important signal array based on input args */
     arch_traceSignalsInit(hfuzz);
 
-    /*
-     * If sanitizer fuzzing enabled and SIGABRT is monitored (abort_on_error=1),
-     * increase number of major frames, since top 7-9 frames will be occupied
-     * with sanitizer runtime library & libc symbols
-     */
-    if (hfuzz->sanitizer.enable && hfuzz->cfg.monitorSIGABRT) {
-        hfuzz->linux.numMajorFrames = 14;
-    }
-
     if (hfuzz->linux.cloneFlags && unshare(hfuzz->linux.cloneFlags) == -1) {
         LOG_E("unshare(%tx)", hfuzz->linux.cloneFlags);
         return false;
@@ -426,14 +386,6 @@ bool arch_archThreadInit(run_t* run) {
 
     if (prctl(PR_SET_CHILD_SUBREAPER, 1UL, 0UL, 0UL, 0UL) == -1) {
         PLOG_W("prctl(PR_SET_CHILD_SUBREAPER, 1)");
-    }
-
-    sigset_t ss;
-    sigemptyset(&ss);
-    sigaddset(&ss, SIGUSR1);
-    if (pthread_sigmask(SIG_BLOCK, &ss, NULL) != 0) {
-        PLOG_W("Couldn't block SIGUSR1");
-        return false;
     }
 
     return true;

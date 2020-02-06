@@ -56,19 +56,16 @@ extern bool files_exists(const char* fileName);
 
 extern const char* files_basename(const char* path);
 
-extern bool files_copyFile(
-    const char* source, const char* destination, bool* dstExists, bool try_link);
-
 extern uint8_t* files_mapFile(const char* fileName, off_t* fileSz, int* fd, bool isWritable);
 
-extern uint8_t* files_mapFileShared(const char* fileName, off_t* fileSz, int* fd);
+extern int files_getTmpMapFlags(int flag, bool nocore);
 
-extern void* files_mapSharedMem(size_t sz, int* fd, const char* name, const char* dir);
+extern void* files_mapSharedMem(size_t sz, int* fd, const char* name, bool nocore, bool export);
 
 extern size_t files_parseSymbolFilter(const char* inFIle, char*** filterList);
 
 extern sa_family_t files_sockFamily(int sock);
 
-extern const char* files_sockAddrToStr(const struct sockaddr* sa);
+extern const char* files_sockAddrToStr(const struct sockaddr* sa, const socklen_t len);
 
 #endif /* ifndef HF_COMMON_FILES */

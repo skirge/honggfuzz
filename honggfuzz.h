@@ -38,7 +38,7 @@
 #include "libhfcommon/util.h"
 
 #define PROG_NAME "honggfuzz"
-#define PROG_VERSION "1.9"
+#define PROG_VERSION "2.0"
 
 /* Name of the template which will be replaced with the proper name of the file */
 #define _HF_FILE_PLACEHOLDER "___FILE___"
@@ -62,7 +62,7 @@
 #define _HF_VERIFIER_ITER 5
 
 /* Size (in bytes) for report data to be stored in stack before written to file */
-#define _HF_REPORT_SIZE 8192
+#define _HF_REPORT_SIZE 32768
 
 /* Perf bitmap size */
 #define _HF_PERF_BITMAP_SIZE_16M (1024U * 1024U * 16U)
@@ -81,6 +81,12 @@
 #define _HF_BITMAP_FD 1022
 /* FD used to pass data to a persistent process */
 #define _HF_PERSISTENT_FD 1023
+
+/* Input file as a string */
+#define _HF_INPUT_FILE_PATH "/dev/fd/" HF_XSTR(_HF_INPUT_FD)
+
+/* Maximum number of supported execve() args */
+#define _HF_ARGS_MAX 512
 
 /* Message indicating that the fuzzed process is ready for new data */
 static const uint8_t HFReadyTag = 'R';
@@ -120,10 +126,10 @@ typedef struct {
 
 /* Memory map struct */
 typedef struct __attribute__((packed)) {
-    uint64_t start;          // region start addr
-    uint64_t end;            // region end addr
-    uint64_t base;           // region base addr
-    char mapName[NAME_MAX];  // bin/DSO name
+    uint64_t start;         // region start addr
+    uint64_t end;           // region end addr
+    uint64_t base;          // region base addr
+    char module[NAME_MAX];  // bin/DSO name
     uint64_t bbCnt;
     uint64_t newBBCnt;
 } memMap_t;
@@ -147,24 +153,24 @@ typedef struct node {
 
 typedef enum {
     _HF_STATE_UNSET = 0,
-    _HF_STATE_STATIC = 1,
-    _HF_STATE_DYNAMIC_DRY_RUN = 2,
-    _HF_STATE_DYNAMIC_SWITCH_TO_MAIN = 3,
-    _HF_STATE_DYNAMIC_MAIN = 4,
+    _HF_STATE_STATIC,
+    _HF_STATE_DYNAMIC_DRY_RUN,
+    _HF_STATE_DYNAMIC_MAIN,
+    _HF_STATE_DYNAMIC_MINIMIZE,
 } fuzzState_t;
 
 struct dynfile_t {
-    uint8_t* data;
     size_t size;
-    TAILQ_ENTRY(dynfile_t)
-    pointers;
+    uint64_t cov[4];
+    char path[PATH_MAX];
+    TAILQ_ENTRY(dynfile_t) pointers;
+    uint8_t data[];
 };
 
 struct strings_t {
-    char* s;
     size_t len;
-    TAILQ_ENTRY(strings_t)
-    pointers;
+    TAILQ_ENTRY(strings_t) pointers;
+    char s[];
 };
 
 typedef struct {
@@ -188,19 +194,21 @@ typedef struct {
     } threads;
     struct {
         const char* inputDir;
+        const char* outputDir;
         DIR* inputDirPtr;
         size_t fileCnt;
         const char* fileExtn;
         bool fileCntDone;
         size_t newUnitsAdded;
-        const char* workDir;
+        char workDir[PATH_MAX];
         const char* crashDir;
-        const char* covDirAll;
         const char* covDirNew;
         bool saveUnique;
         size_t dynfileqCnt;
         pthread_rwlock_t dynfileq_mutex;
+        struct dynfile_t* dynfileqCurrent;
         TAILQ_HEAD(dyns_t, dynfile_t) dynfileq;
+        bool exportFeedback;
     } io;
     struct {
         int argc;
@@ -217,7 +225,8 @@ typedef struct {
         uint64_t dataLimit;
         uint64_t coreLimit;
         bool clearEnv;
-        char* envs[128];
+        char* env_ptrs[128];
+        char env_vals[128][4096];
         sigset_t waitSigSet;
     } exe;
     struct {
@@ -246,12 +255,14 @@ typedef struct {
         bool exitUponCrash;
         const char* reportFile;
         pthread_mutex_t report_mutex;
-        bool monitorSIGABRT;
         size_t dynFileIterExpire;
         bool only_printable;
+        bool minimize;
+        bool switchingToFDM;
     } cfg;
     struct {
         bool enable;
+        bool del_report;
     } sanitizer;
     struct {
         fuzzState_t state;
@@ -284,7 +295,6 @@ typedef struct {
         uint64_t dynamicCutOffAddr;
         bool disableRandomization;
         void* ignoreAddr;
-        size_t numMajorFrames;
         const char* symsBlFile;
         char** symsBl;
         size_t symsBlCnt;
@@ -298,7 +308,6 @@ typedef struct {
     /* For the NetBSD code */
     struct {
         void* ignoreAddr;
-        size_t numMajorFrames;
         const char* symsBlFile;
         char** symsBl;
         size_t symsBlCnt;
@@ -328,7 +337,6 @@ typedef struct {
     char report[_HF_REPORT_SIZE];
     bool mainWorker;
     unsigned mutationsPerRun;
-    struct dynfile_t* dynfileqCurrent;
     uint8_t* dynamicFile;
     size_t dynamicFileSz;
     int dynamicFileFd;
@@ -337,6 +345,7 @@ typedef struct {
     bool waitingForReady;
     runState_t runState;
     bool tmOutSignaled;
+    char* args[_HF_ARGS_MAX + 1];
 #if !defined(_HF_ARCH_DARWIN)
     timer_t timerId;
 #endif  // !defined(_HF_ARCH_DARWIN)

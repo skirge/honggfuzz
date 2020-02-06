@@ -183,6 +183,25 @@ bool subproc_persistentModeStateMachine(run_t* run) {
     }
 }
 
+static void subproc_prepareExecvArgs(run_t* run) {
+    size_t x = 0;
+    for (x = 0; x < _HF_ARGS_MAX && x < (size_t)run->global->exe.argc; x++) {
+        const char* ph_str = strstr(run->global->exe.cmdline[x], _HF_FILE_PLACEHOLDER);
+        if (!strcmp(run->global->exe.cmdline[x], _HF_FILE_PLACEHOLDER)) {
+            run->args[x] = _HF_INPUT_FILE_PATH;
+        } else if (ph_str) {
+            static __thread char argData[PATH_MAX];
+            snprintf(argData, sizeof(argData), "%.*s%s",
+                (int)(ph_str - run->global->exe.cmdline[x]), run->global->exe.cmdline[x],
+                _HF_INPUT_FILE_PATH);
+            run->args[x] = argData;
+        } else {
+            run->args[x] = (char*)run->global->exe.cmdline[x];
+        }
+    }
+    run->args[x] = NULL;
+}
+
 static bool subproc_PrepareExecv(run_t* run) {
     /*
      * The address space limit. If big enough - roughly the size of RAM used
@@ -233,8 +252,9 @@ static bool subproc_PrepareExecv(run_t* run) {
     if (run->global->exe.clearEnv) {
         environ = NULL;
     }
-    for (size_t i = 0; i < ARRAYSIZE(run->global->exe.envs) && run->global->exe.envs[i]; i++) {
-        putenv(run->global->exe.envs[i]);
+    for (size_t i = 0; i < ARRAYSIZE(run->global->exe.env_ptrs) && run->global->exe.env_ptrs[i];
+         i++) {
+        putenv(run->global->exe.env_ptrs[i]);
     }
     char fuzzNo[128];
     snprintf(fuzzNo, sizeof(fuzzNo), "%" PRId32, run->fuzzNo);
@@ -257,13 +277,12 @@ static bool subproc_PrepareExecv(run_t* run) {
     }
 
     /* The input file to _HF_INPUT_FD */
-    if (run->global->exe.persistent &&
-        TEMP_FAILURE_RETRY(dup2(run->dynamicFileFd, _HF_INPUT_FD)) == -1) {
+    if (TEMP_FAILURE_RETRY(dup2(run->dynamicFileFd, _HF_INPUT_FD)) == -1) {
         PLOG_E("dup2('%d', _HF_INPUT_FD='%d')", run->dynamicFileFd, _HF_INPUT_FD);
         return false;
     }
-    if (lseek(run->dynamicFileFd, 0, SEEK_SET) == (off_t)-1) {
-        PLOG_E("lseek(fileFd=%d, 0, SEEK_SET)", run->dynamicFileFd);
+    if (lseek(_HF_INPUT_FD, 0, SEEK_SET) == (off_t)-1) {
+        PLOG_E("lseek(_HF_INPUT_FD=%d, 0, SEEK_SET)", _HF_INPUT_FD);
         return false;
     }
 
@@ -290,6 +309,7 @@ static bool subproc_PrepareExecv(run_t* run) {
         return false;
     }
 
+    subproc_prepareExecvArgs(run);
     return true;
 }
 
@@ -351,6 +371,11 @@ static bool subproc_New(run_t* run) {
             LOG_E("subproc_PrepareExecv() failed");
             exit(EXIT_FAILURE);
         }
+
+        LOG_D("Launching '%s' on file '%s' (%s mode)", run->args[0],
+            run->global->exe.persistent ? "PERSISTENT_MODE" : _HF_INPUT_FILE_PATH,
+            run->global->exe.fuzzStdin ? "stdin" : "file");
+
         if (!arch_launchChild(run)) {
             LOG_E("Error launching child process");
             kill(run->global->threads.mainPid, SIGTERM);
