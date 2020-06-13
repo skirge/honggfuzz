@@ -47,30 +47,32 @@
 
 extern char** environ;
 
-const char* subproc_StatusToStr(int status, char* str, size_t len) {
+const char* subproc_StatusToStr(int status) {
+    static __thread char str[256];
+
     if (WIFEXITED(status)) {
-        snprintf(str, len, "EXITED, exit code: %d", WEXITSTATUS(status));
+        snprintf(str, sizeof(str), "EXITED, exit code: %d", WEXITSTATUS(status));
         return str;
     }
 
     if (WIFSIGNALED(status)) {
-        snprintf(
-            str, len, "SIGNALED, signal: %d (%s)", WTERMSIG(status), strsignal(WTERMSIG(status)));
+        snprintf(str, sizeof(str), "SIGNALED, signal: %d (%s)", WTERMSIG(status),
+            strsignal(WTERMSIG(status)));
         return str;
     }
     if (WIFCONTINUED(status)) {
-        snprintf(str, len, "CONTINUED");
+        snprintf(str, sizeof(str), "CONTINUED");
         return str;
     }
 
     if (!WIFSTOPPED(status)) {
-        snprintf(str, len, "UNKNOWN STATUS: %d", status);
+        snprintf(str, sizeof(str), "UNKNOWN STATUS: %d", status);
         return str;
     }
 
     /* Must be in a stopped state */
     if (WSTOPSIG(status) == (SIGTRAP | 0x80)) {
-        snprintf(str, len, "STOPPED (linux syscall): %d (%s)", WSTOPSIG(status),
+        snprintf(str, sizeof(str), "STOPPED (linux syscall): %d (%s)", WSTOPSIG(status),
             strsignal(WSTOPSIG(status)));
         return str;
     }
@@ -79,52 +81,52 @@ const char* subproc_StatusToStr(int status, char* str, size_t len) {
     if (WSTOPSIG(status) == SIGTRAP && __LINUX_WPTRACEEVENT(status) != 0) {
         switch (__LINUX_WPTRACEEVENT(status)) {
             case PTRACE_EVENT_FORK:
-                snprintf(str, len, "EVENT (Linux) - fork - with signal: %d (%s)", WSTOPSIG(status),
-                    strsignal(WSTOPSIG(status)));
+                snprintf(str, sizeof(str), "EVENT (Linux) - fork - with signal: %d (%s)",
+                    WSTOPSIG(status), strsignal(WSTOPSIG(status)));
                 return str;
             case PTRACE_EVENT_VFORK:
-                snprintf(str, len, "EVENT (Linux) - vfork - with signal: %d (%s)", WSTOPSIG(status),
-                    strsignal(WSTOPSIG(status)));
+                snprintf(str, sizeof(str), "EVENT (Linux) - vfork - with signal: %d (%s)",
+                    WSTOPSIG(status), strsignal(WSTOPSIG(status)));
                 return str;
             case PTRACE_EVENT_CLONE:
-                snprintf(str, len, "EVENT (Linux) - clone - with signal: %d (%s)", WSTOPSIG(status),
-                    strsignal(WSTOPSIG(status)));
+                snprintf(str, sizeof(str), "EVENT (Linux) - clone - with signal: %d (%s)",
+                    WSTOPSIG(status), strsignal(WSTOPSIG(status)));
                 return str;
             case PTRACE_EVENT_EXEC:
-                snprintf(str, len, "EVENT (Linux) - exec - with signal: %d (%s)", WSTOPSIG(status),
-                    strsignal(WSTOPSIG(status)));
+                snprintf(str, sizeof(str), "EVENT (Linux) - exec - with signal: %d (%s)",
+                    WSTOPSIG(status), strsignal(WSTOPSIG(status)));
                 return str;
             case PTRACE_EVENT_VFORK_DONE:
-                snprintf(str, len, "EVENT (Linux) - vfork_done - with signal: %d (%s)",
+                snprintf(str, sizeof(str), "EVENT (Linux) - vfork_done - with signal: %d (%s)",
                     WSTOPSIG(status), strsignal(WSTOPSIG(status)));
                 return str;
             case PTRACE_EVENT_EXIT:
-                snprintf(str, len, "EVENT (Linux) - exit - with signal: %d (%s)", WSTOPSIG(status),
-                    strsignal(WSTOPSIG(status)));
+                snprintf(str, sizeof(str), "EVENT (Linux) - exit - with signal: %d (%s)",
+                    WSTOPSIG(status), strsignal(WSTOPSIG(status)));
                 return str;
             case PTRACE_EVENT_SECCOMP:
-                snprintf(str, len, "EVENT (Linux) - seccomp - with signal: %d (%s)",
+                snprintf(str, sizeof(str), "EVENT (Linux) - seccomp - with signal: %d (%s)",
                     WSTOPSIG(status), strsignal(WSTOPSIG(status)));
                 return str;
             case PTRACE_EVENT_STOP:
-                snprintf(str, len, "EVENT (Linux) - stop - with signal: %d (%s)", WSTOPSIG(status),
-                    strsignal(WSTOPSIG(status)));
+                snprintf(str, sizeof(str), "EVENT (Linux) - stop - with signal: %d (%s)",
+                    WSTOPSIG(status), strsignal(WSTOPSIG(status)));
                 return str;
             default:
-                snprintf(str, len, "EVENT (Linux) UNKNOWN (%d): with signal: %d (%s)",
+                snprintf(str, sizeof(str), "EVENT (Linux) UNKNOWN (%d): with signal: %d (%s)",
                     __LINUX_WPTRACEEVENT(status), WSTOPSIG(status), strsignal(WSTOPSIG(status)));
                 return str;
         }
     }
 #endif /*  defined(PTRACE_EVENT_STOP)  */
 
-    snprintf(
-        str, len, "STOPPED with signal: %d (%s)", WSTOPSIG(status), strsignal(WSTOPSIG(status)));
+    snprintf(str, sizeof(str), "STOPPED with signal: %d (%s)", WSTOPSIG(status),
+        strsignal(WSTOPSIG(status)));
     return str;
 }
 
 static bool subproc_persistentSendFileIndicator(run_t* run) {
-    uint64_t len = (uint64_t)run->dynamicFileSz;
+    uint64_t len = (uint64_t)run->dynfile->size;
     if (!files_sendToSocketNB(run->persistentSock, (uint8_t*)&len, sizeof(len))) {
         PLOG_W("files_sendToSocketNB(len=%zu)", sizeof(len));
         return false;
@@ -248,6 +250,17 @@ static bool subproc_PrepareExecv(run_t* run) {
         PLOG_W("Couldn't enforce the RLIMIT_CORE resource limit, ignoring");
     }
 #endif /* ifdef RLIMIT_CORE */
+#ifdef RLIMIT_STACK
+    if (run->global->exe.stackLimit) {
+        const struct rlimit rl = {
+            .rlim_cur = run->global->exe.stackLimit * 1024ULL * 1024ULL,
+            .rlim_max = run->global->exe.stackLimit * 1024ULL * 1024ULL,
+        };
+        if (setrlimit(RLIMIT_STACK, &rl) == -1) {
+            PLOG_W("Couldn't enforce the RLIMIT_STACK resource limit, ignoring");
+        }
+    }
+#endif /* ifdef RLIMIT_STACK */
 
     if (run->global->exe.clearEnv) {
         environ = NULL;
@@ -270,20 +283,43 @@ static bool subproc_PrepareExecv(run_t* run) {
         /* close_stdout= */ run->global->exe.nullifyStdio,
         /* close_stderr= */ run->global->exe.nullifyStdio);
 
-    /* The bitmap/feedback structure */
-    if (TEMP_FAILURE_RETRY(dup2(run->global->feedback.bbFd, _HF_BITMAP_FD)) == -1) {
-        PLOG_E("dup2(%d, _HF_BITMAP_FD=%d)", run->global->feedback.bbFd, _HF_BITMAP_FD);
+    /* The coverage bitmap/feedback structure */
+    if (TEMP_FAILURE_RETRY(dup2(run->global->feedback.covFeedbackFd, _HF_COV_BITMAP_FD)) == -1) {
+        PLOG_E("dup2(%d, _HF_COV_BITMAP_FD=%d)", run->global->feedback.covFeedbackFd,
+            _HF_COV_BITMAP_FD);
+        return false;
+    }
+    /* The const comparison bitmap/feedback structure */
+    if (run->global->feedback.cmpFeedback &&
+        TEMP_FAILURE_RETRY(dup2(run->global->feedback.cmpFeedbackFd, _HF_CMP_BITMAP_FD)) == -1) {
+        PLOG_E("dup2(%d, _HF_CMP_BITMAP_FD=%d)", run->global->feedback.cmpFeedbackFd,
+            _HF_CMP_BITMAP_FD);
         return false;
     }
 
-    /* The input file to _HF_INPUT_FD */
-    if (TEMP_FAILURE_RETRY(dup2(run->dynamicFileFd, _HF_INPUT_FD)) == -1) {
-        PLOG_E("dup2('%d', _HF_INPUT_FD='%d')", run->dynamicFileFd, _HF_INPUT_FD);
+    /* The per-thread coverage feedback bitmap */
+    if (TEMP_FAILURE_RETRY(dup2(run->perThreadCovFeedbackFd, _HF_PERTHREAD_BITMAP_FD)) == -1) {
+        PLOG_E("dup2(%d, _HF_CMP_PERTHREAD_FD=%d)", run->perThreadCovFeedbackFd,
+            _HF_PERTHREAD_BITMAP_FD);
         return false;
     }
-    if (lseek(_HF_INPUT_FD, 0, SEEK_SET) == (off_t)-1) {
-        PLOG_E("lseek(_HF_INPUT_FD=%d, 0, SEEK_SET)", _HF_INPUT_FD);
-        return false;
+
+    /* Do not try to handle input files with socketfuzzer */
+    if (!run->global->socketFuzzer.enabled) {
+        /* The input file to _HF_INPUT_FD */
+        if (TEMP_FAILURE_RETRY(dup2(run->dynfile->fd, _HF_INPUT_FD)) == -1) {
+            PLOG_E("dup2('%d', _HF_INPUT_FD='%d')", run->dynfile->fd, _HF_INPUT_FD);
+            return false;
+        }
+        if (lseek(_HF_INPUT_FD, 0, SEEK_SET) == (off_t)-1) {
+            PLOG_E("lseek(_HF_INPUT_FD=%d, 0, SEEK_SET)", _HF_INPUT_FD);
+            return false;
+        }
+        if (run->global->exe.fuzzStdin &&
+            TEMP_FAILURE_RETRY(dup2(run->dynfile->fd, STDIN_FILENO)) == -1) {
+            PLOG_E("dup2(_HF_INPUT_FD=%d, STDIN_FILENO=%d)", run->dynfile->fd, STDIN_FILENO);
+            return false;
+        }
     }
 
     /* The log FD */
@@ -301,12 +337,6 @@ static bool subproc_PrepareExecv(run_t* run) {
     sigemptyset(&sset);
     if (sigprocmask(SIG_SETMASK, &sset, NULL) == -1) {
         PLOG_W("sigprocmask(empty_set)");
-    }
-
-    if (run->global->exe.fuzzStdin &&
-        TEMP_FAILURE_RETRY(dup2(run->dynamicFileFd, STDIN_FILENO)) == -1) {
-        PLOG_E("dup2(_HF_INPUT_FD=%d, STDIN_FILENO=%d)", run->dynamicFileFd, STDIN_FILENO);
-        return false;
     }
 
     subproc_prepareExecvArgs(run);
@@ -400,8 +430,6 @@ static bool subproc_New(run_t* run) {
 }
 
 bool subproc_Run(run_t* run) {
-    run->timeStartedMillis = util_timeNowMillis();
-
     if (!subproc_New(run)) {
         LOG_E("subproc_New()");
         return false;
@@ -410,9 +438,13 @@ bool subproc_Run(run_t* run) {
     arch_prepareParent(run);
     arch_reapChild(run);
 
-    int64_t diffMillis = util_timeNowMillis() - run->timeStartedMillis;
-    if (diffMillis >= run->global->timing.timeOfLongestUnitInMilliseconds) {
-        run->global->timing.timeOfLongestUnitInMilliseconds = diffMillis;
+    int64_t diffUSecs = util_timeNowUSecs() - run->timeStartedUSecs;
+
+    {
+        MX_SCOPED_LOCK(&run->global->mutex.timing);
+        if (diffUSecs >= ATOMIC_GET(run->global->timing.timeOfLongestUnitUSecs)) {
+            ATOMIC_SET(run->global->timing.timeOfLongestUnitUSecs, diffUSecs);
+        }
     }
 
     return true;
@@ -482,17 +514,17 @@ void subproc_checkTimeLimit(run_t* run) {
         return;
     }
 
-    int64_t curMillis = util_timeNowMillis();
-    int64_t diffMillis = curMillis - run->timeStartedMillis;
+    int64_t curUSecs  = util_timeNowUSecs();
+    int64_t diffUSecs = curUSecs - run->timeStartedUSecs;
 
-    if (run->tmOutSignaled && (diffMillis > ((run->global->timing.tmOut + 1) * 1000))) {
+    if (run->tmOutSignaled && (diffUSecs > ((run->global->timing.tmOut + 1) * 1000000))) {
         /* Has this instance been already signaled due to timeout? Just, SIGKILL it */
         LOG_W("pid=%d has already been signaled due to timeout. Killing it with SIGKILL", run->pid);
         kill(run->pid, SIGKILL);
         return;
     }
 
-    if ((diffMillis > (run->global->timing.tmOut * 1000)) && !run->tmOutSignaled) {
+    if ((diffUSecs > (run->global->timing.tmOut * 1000000)) && !run->tmOutSignaled) {
         run->tmOutSignaled = true;
         LOG_W("pid=%d took too much time (limit %ld s). Killing it with %s", (int)run->pid,
             (long)run->global->timing.tmOut,

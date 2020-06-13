@@ -231,36 +231,36 @@ struct user_regs_struct {
 
 static struct {
     const char* descr;
-    bool important;
+    bool        important;
 } arch_sigs[_NSIG + 1] = {
     [0 ...(_NSIG)].important = false,
-    [0 ...(_NSIG)].descr = "UNKNOWN",
+    [0 ...(_NSIG)].descr     = "UNKNOWN",
 
     [SIGTRAP].important = false,
-    [SIGTRAP].descr = "SIGTRAP",
+    [SIGTRAP].descr     = "SIGTRAP",
 
     [SIGILL].important = true,
-    [SIGILL].descr = "SIGILL",
+    [SIGILL].descr     = "SIGILL",
 
     [SIGFPE].important = true,
-    [SIGFPE].descr = "SIGFPE",
+    [SIGFPE].descr     = "SIGFPE",
 
     [SIGSEGV].important = true,
-    [SIGSEGV].descr = "SIGSEGV",
+    [SIGSEGV].descr     = "SIGSEGV",
 
     [SIGBUS].important = true,
-    [SIGBUS].descr = "SIGBUS",
+    [SIGBUS].descr     = "SIGBUS",
 
     [SIGABRT].important = true,
-    [SIGABRT].descr = "SIGABRT",
+    [SIGABRT].descr     = "SIGABRT",
 
     /* Is affected from tmoutVTALRM flag */
     [SIGVTALRM].important = false,
-    [SIGVTALRM].descr = "SIGVTALRM-TMOUT",
+    [SIGVTALRM].descr     = "SIGVTALRM-TMOUT",
 
     /* seccomp-bpf kill */
     [SIGSYS].important = true,
-    [SIGSYS].descr = "SIGSYS",
+    [SIGSYS].descr     = "SIGSYS",
 };
 
 #ifndef SI_FROMUSER
@@ -273,11 +273,11 @@ static size_t arch_getProcMem(pid_t pid, uint8_t* buf, size_t len, uint64_t pc) 
      */
     const struct iovec local_iov = {
         .iov_base = buf,
-        .iov_len = len,
+        .iov_len  = len,
     };
     const struct iovec remote_iov = {
         .iov_base = (void*)(uintptr_t)pc,
-        .iov_len = len,
+        .iov_len  = len,
     };
     if (process_vm_readv(pid, &local_iov, 1, &remote_iov, 1, 0) == (ssize_t)len) {
         return len;
@@ -289,12 +289,12 @@ static size_t arch_getProcMem(pid_t pid, uint8_t* buf, size_t len, uint64_t pc) 
      * Ok, let's do it via ptrace() then.
      * len must be aligned to the sizeof(long)
      */
-    int cnt = len / sizeof(long);
+    int    cnt   = len / sizeof(long);
     size_t memsz = 0;
 
     for (int x = 0; x < cnt; x++) {
         uint8_t* addr = (uint8_t*)(uintptr_t)pc + (int)(x * sizeof(long));
-        long ret = ptrace(PTRACE_PEEKDATA, pid, addr, NULL);
+        long     ret  = ptrace(PTRACE_PEEKDATA, pid, addr, NULL);
 
         if (errno != 0) {
             PLOG_W("Couldn't PT_READ_D on pid %d, addr: %p", pid, addr);
@@ -322,7 +322,7 @@ static size_t arch_getPC(pid_t pid, uint64_t* pc, uint64_t* status_reg HF_ATTR_U
 #endif
     const struct iovec pt_iov = {
         .iov_base = &regs,
-        .iov_len = sizeof(regs),
+        .iov_len  = sizeof(regs),
     };
 
     if (ptrace(PTRACE_GETREGSET, pid, NT_PRSTATUS, &pt_iov) == -1L) {
@@ -345,8 +345,8 @@ static size_t arch_getPC(pid_t pid, uint64_t* pc, uint64_t* status_reg HF_ATTR_U
      */
     if (pt_iov.iov_len == sizeof(struct user_regs_struct_32)) {
         struct user_regs_struct_32* r32 = (struct user_regs_struct_32*)&regs;
-        *pc = r32->eip;
-        *status_reg = r32->eflags;
+        *pc                             = r32->eip;
+        *status_reg                     = r32->eflags;
         return pt_iov.iov_len;
     }
 
@@ -355,8 +355,8 @@ static size_t arch_getPC(pid_t pid, uint64_t* pc, uint64_t* status_reg HF_ATTR_U
      */
     if (pt_iov.iov_len == sizeof(struct user_regs_struct_64)) {
         struct user_regs_struct_64* r64 = (struct user_regs_struct_64*)&regs;
-        *pc = r64->ip;
-        *status_reg = r64->flags;
+        *pc                             = r64->ip;
+        *status_reg                     = r64->flags;
         return pt_iov.iov_len;
     }
     LOG_W("Unknown registers structure size: '%zd'", pt_iov.iov_len);
@@ -370,10 +370,10 @@ static size_t arch_getPC(pid_t pid, uint64_t* pc, uint64_t* status_reg HF_ATTR_U
     if (pt_iov.iov_len == sizeof(struct user_regs_struct_32)) {
         struct user_regs_struct_32* r32 = (struct user_regs_struct_32*)&regs;
 #ifdef __ANDROID__
-        *pc = r32->ARM_pc;
+        *pc         = r32->ARM_pc;
         *status_reg = r32->ARM_cpsr;
 #else
-        *pc = r32->uregs[ARM_pc];
+        *pc         = r32->uregs[ARM_pc];
         *status_reg = r32->uregs[ARM_cpsr];
 #endif
         return pt_iov.iov_len;
@@ -384,8 +384,8 @@ static size_t arch_getPC(pid_t pid, uint64_t* pc, uint64_t* status_reg HF_ATTR_U
      */
     if (pt_iov.iov_len == sizeof(struct user_regs_struct_64)) {
         struct user_regs_struct_64* r64 = (struct user_regs_struct_64*)&regs;
-        *pc = r64->pc;
-        *status_reg = r64->pstate;
+        *pc                             = r64->pc;
+        *status_reg                     = r64->pstate;
         return pt_iov.iov_len;
     }
     LOG_W("Unknown registers structure size: '%zd'", pt_iov.iov_len);
@@ -398,7 +398,7 @@ static size_t arch_getPC(pid_t pid, uint64_t* pc, uint64_t* status_reg HF_ATTR_U
      */
     if (pt_iov.iov_len == sizeof(struct user_regs_struct_32)) {
         struct user_regs_struct_32* r32 = (struct user_regs_struct_32*)&regs;
-        *pc = r32->nip;
+        *pc                             = r32->nip;
         return pt_iov.iov_len;
     }
 
@@ -407,7 +407,7 @@ static size_t arch_getPC(pid_t pid, uint64_t* pc, uint64_t* status_reg HF_ATTR_U
      */
     if (pt_iov.iov_len == sizeof(struct user_regs_struct_64)) {
         struct user_regs_struct_64* r64 = (struct user_regs_struct_64*)&regs;
-        *pc = r64->nip;
+        *pc                             = r64->nip;
         return pt_iov.iov_len;
     }
 
@@ -431,7 +431,7 @@ static void arch_getInstrStr(pid_t pid, uint64_t pc, uint64_t status_reg HF_ATTR
      * which is sizeof(long) on 64bit CPU archs (on most of them, I hope;)
      */
     uint8_t buf[MAX_INSTR_SZ];
-    size_t memsz;
+    size_t  memsz;
 
     snprintf(instr, _HF_INSTR_SZ, "%s", "[UNKNOWN]");
 
@@ -440,8 +440,10 @@ static void arch_getInstrStr(pid_t pid, uint64_t pc, uint64_t status_reg HF_ATTR
         return;
     }
 #if !defined(__ANDROID__)
+#if !defined(_HF_LINUX_NO_BFD)
     arch_bfdDisasm(pid, buf, memsz, instr);
-#else
+#endif /* !defined(_HF_LINUX_NO_BFD) */
+#else  /* !defined(__ANDROID__) */
     cs_arch arch;
     cs_mode mode;
 #if defined(__arm__) || defined(__aarch64__)
@@ -458,7 +460,7 @@ static void arch_getInstrStr(pid_t pid, uint64_t pc, uint64_t status_reg HF_ATTR
     LOG_E("Unknown/Unsupported Android CPU architecture");
 #endif
 
-    csh handle;
+    csh    handle;
     cs_err err = cs_open(arch, mode, &handle);
     if (err != CS_ERR_OK) {
         LOG_W("Capstone initialization failed: '%s'", cs_strerror(err));
@@ -466,7 +468,7 @@ static void arch_getInstrStr(pid_t pid, uint64_t pc, uint64_t status_reg HF_ATTR
     }
 
     cs_insn* insn;
-    size_t count = cs_disasm(handle, buf, sizeof(buf), pc, 0, &insn);
+    size_t   count = cs_disasm(handle, buf, sizeof(buf), pc, 0, &insn);
 
     if (count < 1) {
         LOG_W("Couldn't disassemble the assembler instructions' stream: '%s'",
@@ -495,26 +497,30 @@ static void arch_traceAnalyzeData(run_t* run, pid_t pid) {
         free(funcs);
     };
 
-    uint64_t pc = 0;
+    uint64_t pc         = 0;
     uint64_t status_reg = 0;
-    size_t pcRegSz = arch_getPC(pid, &pc, &status_reg);
+    size_t   pcRegSz    = arch_getPC(pid, &pc, &status_reg);
     if (!pcRegSz) {
         LOG_W("ptrace arch_getPC failed");
         return;
     }
 
-    uint64_t crashAddr = 0;
-    char description[HF_STR_LEN] = {};
-    size_t funcCnt = sanitizers_parseReport(run, pid, funcs, &pc, &crashAddr, description);
+    uint64_t crashAddr               = 0;
+    char     description[HF_STR_LEN] = {};
+    size_t   funcCnt = sanitizers_parseReport(run, pid, funcs, &pc, &crashAddr, description);
     if (funcCnt <= 0) {
         funcCnt = arch_unwindStack(pid, funcs);
 #if !defined(__ANDROID__)
+#if !defined(_HF_LINUX_NO_BFD)
         arch_bfdResolveSyms(pid, funcs, funcCnt);
+#endif /* !defined(_HF_LINUX_NO_BFD) */
 #endif /* !defined(__ANDROID__) */
     }
 
 #if !defined(__ANDROID__)
+#if !defined(_HF_LINUX_NO_BFD)
     arch_bfdDemangle(funcs, funcCnt);
+#endif /* !defined(_HF_LINUX_NO_BFD) */
 #endif /* !defined(__ANDROID__) */
 
     /*
@@ -524,22 +530,22 @@ static void arch_traceAnalyzeData(run_t* run, pid_t pid) {
 }
 
 static void arch_traceSaveData(run_t* run, pid_t pid) {
-    char instr[_HF_INSTR_SZ] = "\x00";
-    siginfo_t si = {};
+    char      instr[_HF_INSTR_SZ] = "\x00";
+    siginfo_t si                  = {};
 
     if (ptrace(PTRACE_GETSIGINFO, pid, 0, &si) == -1) {
         PLOG_W("Couldn't get siginfo for pid %d", pid);
     }
 
-    uint64_t crashAddr = (uint64_t)si.si_addr;
+    uint64_t crashAddr = (uint64_t)(uintptr_t)si.si_addr;
     /* User-induced signals don't set si.si_addr */
     if (SI_FROMUSER(&si)) {
         crashAddr = 0UL;
     }
 
-    uint64_t pc = 0;
+    uint64_t pc         = 0;
     uint64_t status_reg = 0;
-    size_t pcRegSz = arch_getPC(pid, &pc, &status_reg);
+    size_t   pcRegSz    = arch_getPC(pid, &pc, &status_reg);
     if (!pcRegSz) {
         LOG_W("ptrace arch_getPC failed");
         return;
@@ -553,17 +559,21 @@ static void arch_traceSaveData(run_t* run, pid_t pid) {
         free(funcs);
     };
 
-    char description[HF_STR_LEN] = {};
+    char   description[HF_STR_LEN] = {};
     size_t funcCnt = sanitizers_parseReport(run, pid, funcs, &pc, &crashAddr, description);
     if (funcCnt == 0) {
         funcCnt = arch_unwindStack(pid, funcs);
 #if !defined(__ANDROID__)
+#if !defined(_HF_LINUX_NO_BFD)
         arch_bfdResolveSyms(pid, funcs, funcCnt);
+#endif /* !defined(_HF_LINUX_NO_BFD) */
 #endif /* !defined(__ANDROID__) */
     }
 
 #if !defined(__ANDROID__)
+#if !defined(_HF_LINUX_NO_BFD)
     arch_bfdDemangle(funcs, funcCnt);
+#endif /* !defined(_HF_LINUX_NO_BFD) */
 #endif /* !defined(__ANDROID__) */
     arch_getInstrStr(pid, pc, status_reg, pcRegSz, instr);
 
@@ -571,9 +581,10 @@ static void arch_traceSaveData(run_t* run, pid_t pid) {
           " instr: '%s'",
         pid, si.si_signo, si.si_errno, si.si_code, si.si_addr, pc, crashAddr, instr);
 
-    if (!SI_FROMUSER(&si) && pc && crashAddr < (uint64_t)run->global->linux.ignoreAddr) {
+    if (!SI_FROMUSER(&si) && pc &&
+        crashAddr < (uint64_t)(uintptr_t)run->global->arch_linux.ignoreAddr) {
         LOG_I("Input is interesting (%s), but the si.si_addr is %p (below %p), skipping",
-            util_sigName(si.si_signo), si.si_addr, run->global->linux.ignoreAddr);
+            util_sigName(si.si_signo), si.si_addr, run->global->arch_linux.ignoreAddr);
         return;
     }
 
@@ -624,9 +635,9 @@ static void arch_traceSaveData(run_t* run, pid_t pid) {
      * both stackhash and symbol blacklist. Crash is always kept regardless
      * of the status of uniqueness flag.
      */
-    if (run->global->linux.symsWl) {
+    if (run->global->arch_linux.symsWl) {
         char* wlSymbol = arch_btContainsSymbol(
-            run->global->linux.symsWlCnt, run->global->linux.symsWl, funcCnt, funcs);
+            run->global->arch_linux.symsWlCnt, run->global->arch_linux.symsWl, funcCnt, funcs);
         if (wlSymbol != NULL) {
             saveUnique = false;
             LOG_D("Whitelisted symbol '%s' found, skipping blacklist checks", wlSymbol);
@@ -647,7 +658,7 @@ static void arch_traceSaveData(run_t* run, pid_t pid) {
          * Check if backtrace contains blacklisted symbol
          */
         char* blSymbol = arch_btContainsSymbol(
-            run->global->linux.symsBlCnt, run->global->linux.symsBl, funcCnt, funcs);
+            run->global->arch_linux.symsBlCnt, run->global->arch_linux.symsBl, funcCnt, funcs);
         if (blSymbol != NULL) {
             LOG_I("Blacklisted symbol '%s' found, skipping", blSymbol);
             ATOMIC_POST_INC(run->global->cnts.blCrashesCnt);
@@ -659,8 +670,8 @@ static void arch_traceSaveData(run_t* run, pid_t pid) {
     ATOMIC_POST_ADD(run->global->cfg.dynFileIterExpire, _HF_DYNFILE_SUB_MASK);
 
     /* Those addresses will be random, so depend on stack-traces for uniqueness */
-    if (!run->global->linux.disableRandomization) {
-        pc = 0UL;
+    if (!run->global->arch_linux.disableRandomization) {
+        pc        = 0UL;
         crashAddr = 0UL;
     }
     /* crashAddr (si.si_addr) never makes sense for SIGABRT */
@@ -671,7 +682,7 @@ static void arch_traceSaveData(run_t* run, pid_t pid) {
     /* If dry run mode, copy file with same name into workspace */
     if (run->global->mutate.mutationsPerRun == 0U && run->global->cfg.useVerifier) {
         snprintf(run->crashFileName, sizeof(run->crashFileName), "%s/%s", run->global->io.crashDir,
-            run->origFileName);
+            run->dynfile->path);
     } else if (saveUnique) {
         snprintf(run->crashFileName, sizeof(run->crashFileName),
             "%s/%s.PC.%" PRIx64 ".STACK.%" PRIx64 ".CODE.%d.ADDR.%" PRIx64 ".INSTR.%s.%s",
@@ -698,7 +709,7 @@ static void arch_traceSaveData(run_t* run, pid_t pid) {
         return;
     }
 
-    if (!files_writeBufToFile(run->crashFileName, run->dynamicFile, run->dynamicFileSz,
+    if (!files_writeBufToFile(run->crashFileName, run->dynfile->data, run->dynfile->size,
             O_CREAT | O_EXCL | O_WRONLY | O_CLOEXEC)) {
         LOG_E("Couldn't write to '%s'", run->crashFileName);
         return;
@@ -736,7 +747,8 @@ static void arch_traceEvent(int status, pid_t pid) {
                 LOG_D(
                     "PID: %d terminated with signal: %lu", pid, (unsigned long)WTERMSIG(event_msg));
             } else {
-                LOG_D("PID: %d exited with unknown status: %lu", pid, event_msg);
+                LOG_D("PID: %d exited with unknown status: %lu (%s)", pid, event_msg,
+                    subproc_StatusToStr(event_msg));
             }
         } break;
         default:
@@ -811,7 +823,7 @@ static bool arch_listThreads(int tasks[], size_t thrSz, int pid) {
     }
 
     size_t count = 0;
-    DIR* dir = opendir(path);
+    DIR*   dir   = opendir(path);
     if (!dir) {
         PLOG_E("Couldn't open dir '%s'", path);
         return false;
@@ -821,7 +833,7 @@ static bool arch_listThreads(int tasks[], size_t thrSz, int pid) {
     };
 
     for (;;) {
-        errno = 0;
+        errno                    = 0;
         const struct dirent* res = readdir(dir);
         if (res == NULL && errno != 0) {
             PLOG_E("Couldn't read contents of '%s'", path);
@@ -855,7 +867,7 @@ static bool arch_listThreads(int tasks[], size_t thrSz, int pid) {
 
 bool arch_traceWaitForPidStop(pid_t pid) {
     for (;;) {
-        int status;
+        int   status;
         pid_t ret = wait4(pid, &status, __WALL | WUNTRACED, NULL);
         if (ret == -1 && errno == EINTR) {
             continue;
@@ -865,7 +877,8 @@ bool arch_traceWaitForPidStop(pid_t pid) {
             return false;
         }
         if (!WIFSTOPPED(status)) {
-            LOG_W("PID %d not in a stopped state - status:%d", pid, status);
+            LOG_W("PID %d not in a stopped state - status:%d (%s)", pid, status,
+                subproc_StatusToStr(status));
             return false;
         }
         return true;
@@ -951,8 +964,8 @@ void arch_traceSignalsInit(honggfuzz_t* hfuzz) {
         LOG_I("Sanitizer support enabled. SIGSEGV/SIGBUS/SIGILL/SIGFPE will not be reported, and "
               "should be handled by *SAN code internally");
         arch_sigs[SIGSEGV].important = false;
-        arch_sigs[SIGBUS].important = false;
-        arch_sigs[SIGILL].important = false;
-        arch_sigs[SIGFPE].important = false;
+        arch_sigs[SIGBUS].important  = false;
+        arch_sigs[SIGILL].important  = false;
+        arch_sigs[SIGFPE].important  = false;
     }
 }

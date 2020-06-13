@@ -1,5 +1,7 @@
 FROM ubuntu
 
+ENV DEBIAN_FRONTEND noninteractive
+
 RUN apt-get -y update && apt-get install -y \
 build-essential zlib1g-dev pkg-config libglib2.0-dev binutils-dev libboost-all-dev autoconf libtool libssl-dev libpixman-1-dev libpython-dev python-pip python-capstone virtualenv \
 	    gcc \

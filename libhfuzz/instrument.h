@@ -24,11 +24,18 @@
 #ifndef _HF_LIBHFUZZ_INSTRUMENT_H_
 #define _HF_LIBHFUZZ_INSTRUMENT_H_
 
-#include <inttypes.h>
 #include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 
-/* Returns true if the new value is better */
-bool instrumentUpdateCmpMap(uintptr_t addr, uint32_t v);
-void instrumentClearNewCov();
+extern void     instrument8BitCountersCount(void);
+extern void     instrumentResetLocalCovFeedback(void);
+extern unsigned instrumentThreadNo(void);
+extern bool     instrumentUpdateCmpMap(uintptr_t addr, uint32_t v);
+extern void     instrumentClearNewCov();
+extern void     instrumentAddConstMem(const void* m, size_t len, bool check_if_ro);
+extern void     instrumentAddConstStr(const char* s);
+extern void     instrumentAddConstStrN(const char* s, size_t n);
+extern bool     instrumentConstAvail();
 
 #endif /* ifdef _HF_LIBHFUZZ_INSTRUMENT_H_ */

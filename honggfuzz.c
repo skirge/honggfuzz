@@ -23,13 +23,11 @@
  */
 
 #include <errno.h>
-#include <getopt.h>
 #include <inttypes.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/mman.h>
 #include <sys/resource.h>
 #include <sys/time.h>
 #include <time.h>
@@ -46,8 +44,8 @@
 #include "socketfuzzer.h"
 #include "subproc.h"
 
-static int sigReceived = 0;
-static bool clearWin = false;
+static int  sigReceived = 0;
+static bool clearWin    = false;
 
 /*
  * CygWin/MinGW incorrectly copies stack during fork(), so we need to keep some
@@ -103,7 +101,7 @@ static void setupRLimits(void) {
         LOG_E("RLIMIT_NOFILE max limit < 1024 (%zu). Expect troubles!", (size_t)rlim.rlim_max);
         return;
     }
-    rlim.rlim_cur = MIN(1024, rlim.rlim_max);  // we don't need more
+    rlim.rlim_cur = MIN(1024, rlim.rlim_max);    // we don't need more
     if (setrlimit(RLIMIT_NOFILE, &rlim) == -1) {
         PLOG_E("Couldn't setrlimit(RLIMIT_NOFILE, cur=%zu/max=%zu)", (size_t)rlim.rlim_cur,
             (size_t)rlim.rlim_max);
@@ -114,12 +112,12 @@ static void setupMainThreadTimer(void) {
     const struct itimerval it = {
         .it_value =
             {
-                .tv_sec = 1,
+                .tv_sec  = 1,
                 .tv_usec = 0,
             },
         .it_interval =
             {
-                .tv_sec = 0,
+                .tv_sec  = 0,
                 .tv_usec = 1000ULL * 200ULL,
             },
     };
@@ -149,7 +147,7 @@ static void setupSignalsPreThreads(void) {
 
     struct sigaction sa = {
         .sa_handler = sigHandler,
-        .sa_flags = 0,
+        .sa_flags   = 0,
     };
     sigemptyset(&sa.sa_mask);
     if (sigaction(SIGTERM, &sa, NULL) == -1) {
@@ -188,17 +186,17 @@ static void setupSignalsMainThread(void) {
 
 static void printSummary(honggfuzz_t* hfuzz) {
     uint64_t exec_per_sec = 0;
-    uint64_t elapsed_sec = time(NULL) - hfuzz->timing.timeStart;
+    uint64_t elapsed_sec  = time(NULL) - hfuzz->timing.timeStart;
     if (elapsed_sec) {
         exec_per_sec = hfuzz->cnts.mutationsCnt / elapsed_sec;
     }
-    uint64_t guardNb = ATOMIC_GET(hfuzz->feedback.feedbackMap->guardNb);
+    uint64_t guardNb = ATOMIC_GET(hfuzz->feedback.covFeedbackMap->guardNb);
     uint64_t branch_percent_cov =
-        guardNb ? ((100 * ATOMIC_GET(hfuzz->linux.hwCnts.softCntEdge)) / guardNb) : 0;
+        guardNb ? ((100 * ATOMIC_GET(hfuzz->feedback.hwCnts.softCntEdge)) / guardNb) : 0;
     struct rusage usage;
     if (getrusage(RUSAGE_CHILDREN, &usage)) {
         PLOG_W("getrusage  failed");
-        usage.ru_maxrss = 0;  // 0 means something went wrong with rusage
+        usage.ru_maxrss = 0;    // 0 means something went wrong with rusage
     }
 #ifdef _HF_ARCH_DARWIN
     usage.ru_maxrss >>= 20;
@@ -211,7 +209,7 @@ static void printSummary(honggfuzz_t* hfuzz) {
           "peak_rss_mb:%lu",
         hfuzz->cnts.mutationsCnt, elapsed_sec, exec_per_sec, hfuzz->cnts.crashesCnt,
         hfuzz->cnts.timeoutedCnt, hfuzz->io.newUnitsAdded,
-        hfuzz->timing.timeOfLongestUnitInMilliseconds, hfuzz->feedback.feedbackMap->guardNb,
+        hfuzz->timing.timeOfLongestUnitUSecs / 1000U, hfuzz->feedback.covFeedbackMap->guardNb,
         branch_percent_cov, usage.ru_maxrss);
 }
 
@@ -235,7 +233,7 @@ static void* signalThread(void* arg) {
 
     for (;;) {
         int sig = 0;
-        errno = 0;
+        errno   = 0;
         int ret = sigwait(&ss, &sig);
         if (ret == EINTR) {
             continue;
@@ -295,11 +293,24 @@ static void mainThreadLoop(honggfuzz_t* hfuzz) {
     }
 }
 
+static const char* strYesNo(bool yes) {
+    return (yes ? "true" : "false");
+}
+
+static const char* getGitVersion() {
+    static char version[] = "$Id$";
+    if (strlen(version) == 47) {
+        version[45] = '\0';
+        return &version[5];
+    }
+    return "UNKNOWN";
+}
+
 int main(int argc, char** argv) {
     /*
      * Work around CygWin/MinGW
      */
-    char** myargs = (char**)util_Malloc(sizeof(char*) * (argc + 1));
+    char** myargs = (char**)util_Calloc(sizeof(char*) * (argc + 1));
     defer {
         free(myargs);
     };
@@ -310,7 +321,7 @@ int main(int argc, char** argv) {
     }
     myargs[i] = NULL;
 
-    if (cmdlineParse(argc, myargs, &hfuzz) == false) {
+    if (!cmdlineParse(argc, myargs, &hfuzz)) {
         LOG_F("Parsing of the cmd-line arguments failed");
     }
     if (hfuzz.io.inputDir && access(hfuzz.io.inputDir, R_OK) == -1) {
@@ -323,6 +334,16 @@ int main(int argc, char** argv) {
         LOG_I("Minimization mode enabled. Setting number of threads to 1");
         hfuzz.threads.threadsMax = 1;
     }
+
+    char tmstr[64];
+    util_getLocalTime("%F.%H.%M.%S", tmstr, sizeof(tmstr), time(NULL));
+    LOG_I("Start time:'%s' bin:'%s', input:'%s', output:'%s', persistent:%s, stdin:%s, "
+          "mutation_rate:%u, timeout:%ld, max_runs:%zu, threads:%zu, minimize:%s, git_commit:%s",
+        tmstr, hfuzz.exe.cmdline[0], hfuzz.io.inputDir,
+        hfuzz.io.outputDir ? hfuzz.io.outputDir : hfuzz.io.inputDir, strYesNo(hfuzz.exe.persistent),
+        strYesNo(hfuzz.exe.fuzzStdin), hfuzz.mutate.mutationsPerRun, (long)hfuzz.timing.tmOut,
+        hfuzz.mutate.mutationsMax, hfuzz.threads.threadsMax, strYesNo(hfuzz.cfg.minimize),
+        getGitVersion());
 
     sigemptyset(&hfuzz.exe.waitSigSet);
     sigaddset(&hfuzz.exe.waitSigSet, SIGIO);   /* Persistent socket data */
@@ -341,14 +362,14 @@ int main(int argc, char** argv) {
         exit(EXIT_FAILURE);
     }
 
-    if (hfuzz.mutate.dictionaryFile && (input_parseDictionary(&hfuzz) == false)) {
+    if (hfuzz.mutate.dictionaryFile && !input_parseDictionary(&hfuzz)) {
         LOG_F("Couldn't parse dictionary file ('%s')", hfuzz.mutate.dictionaryFile);
     }
 
-    if (hfuzz.feedback.blacklistFile && (input_parseBlacklist(&hfuzz) == false)) {
+    if (hfuzz.feedback.blacklistFile && !input_parseBlacklist(&hfuzz)) {
         LOG_F("Couldn't parse stackhash blacklist file ('%s')", hfuzz.feedback.blacklistFile);
     }
-#define hfuzzl hfuzz.linux
+#define hfuzzl hfuzz.arch_linux
     if (hfuzzl.symsBlFile &&
         ((hfuzzl.symsBlCnt = files_parseSymbolFilter(hfuzzl.symsBlFile, &hfuzzl.symsBl)) == 0)) {
         LOG_F("Couldn't parse symbols blacklist file ('%s')", hfuzzl.symsBlFile);
@@ -359,9 +380,19 @@ int main(int argc, char** argv) {
         LOG_F("Couldn't parse symbols whitelist file ('%s')", hfuzzl.symsWlFile);
     }
 
-    if (!(hfuzz.feedback.feedbackMap = files_mapSharedMem(sizeof(feedback_t), &hfuzz.feedback.bbFd,
-              "hfuzz-feedback", /* nocore= */ true, /* export= */ hfuzz.io.exportFeedback))) {
-        LOG_F("files_mapSharedMem(sz=%zu, dir='%s') failed", sizeof(feedback_t), hfuzz.io.workDir);
+    if (!(hfuzz.feedback.covFeedbackMap =
+                files_mapSharedMem(sizeof(feedback_t), &hfuzz.feedback.covFeedbackFd,
+                    "hf-covfeedback", /* nocore= */ true, /* export= */ hfuzz.io.exportFeedback))) {
+        LOG_F("files_mapSharedMem(name='hf-covfeddback', sz=%zu, dir='%s') failed",
+            sizeof(feedback_t), hfuzz.io.workDir);
+    }
+    if (hfuzz.feedback.cmpFeedback) {
+        if (!(hfuzz.feedback.cmpFeedbackMap = files_mapSharedMem(sizeof(cmpfeedback_t),
+                  &hfuzz.feedback.cmpFeedbackFd, "hf-cmpfeedback", /* nocore= */ true,
+                  /* export= */ hfuzz.io.exportFeedback))) {
+            LOG_F("files_mapSharedMem(name='hf-cmpfeedback', sz=%zu, dir='%s') failed",
+                sizeof(cmpfeedback_t), hfuzz.io.workDir);
+        }
     }
 
     setupRLimits();
@@ -379,22 +410,19 @@ int main(int argc, char** argv) {
     if (hfuzz.feedback.blacklist) {
         free(hfuzz.feedback.blacklist);
     }
-    if (hfuzz.mutate.dictionaryCnt) {
-        input_freeDictionary(&hfuzz);
-    }
 #if defined(_HF_ARCH_LINUX)
-    if (hfuzz.linux.symsBl) {
-        free(hfuzz.linux.symsBl);
+    if (hfuzz.arch_linux.symsBl) {
+        free(hfuzz.arch_linux.symsBl);
     }
-    if (hfuzz.linux.symsWl) {
-        free(hfuzz.linux.symsWl);
+    if (hfuzz.arch_linux.symsWl) {
+        free(hfuzz.arch_linux.symsWl);
     }
 #elif defined(_HF_ARCH_NETBSD)
-    if (hfuzz.netbsd.symsBl) {
-        free(hfuzz.netbsd.symsBl);
+    if (hfuzz.arch_netbsd.symsBl) {
+        free(hfuzz.arch_netbsd.symsBl);
     }
-    if (hfuzz.netbsd.symsWl) {
-        free(hfuzz.netbsd.symsWl);
+    if (hfuzz.arch_netbsd.symsWl) {
+        free(hfuzz.arch_netbsd.symsWl);
     }
 #endif
     if (hfuzz.socketFuzzer.enabled) {

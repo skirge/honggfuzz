@@ -26,10 +26,10 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
-#include <signal.h>
+#include <limits.h>
 #include <stdio.h>
-#include <sys/stat.h>
-#include <sys/types.h>
+#include <time.h>
+#include <unistd.h>
 
 #include "libhfcommon/common.h"
 #include "libhfcommon/log.h"
@@ -70,7 +70,7 @@ void report_saveReport(run_t* run) {
         return;
     }
 
-    MX_SCOPED_LOCK(&run->global->cfg.report_mutex);
+    MX_SCOPED_LOCK(&run->global->mutex.report);
 
     if (reportFD == -1) {
         char reportFName[PATH_MAX];
@@ -111,9 +111,9 @@ void report_saveReport(run_t* run) {
         run->global->exe.externalCommand == NULL ? "NULL" : run->global->exe.externalCommand,
         run->global->exe.fuzzStdin ? "TRUE" : "FALSE", run->global->timing.tmOut,
 #if defined(_HF_ARCH_LINUX)
-        run->global->linux.ignoreAddr,
+        run->global->arch_linux.ignoreAddr,
 #elif defined(_HF_ARCH_NETBSD)
-        run->global->netbsd.ignoreAddr,
+        run->global->arch_netbsd.ignoreAddr,
 #endif
         run->global->exe.asLimit, run->global->exe.rssLimit, run->global->exe.dataLimit,
         run->global->mutate.dictionaryFile == NULL ? "NULL" : run->global->mutate.dictionaryFile);
@@ -134,7 +134,7 @@ void report_appendReport(pid_t pid, run_t* run, funcs_t* funcs, size_t funcCnt, 
     uint64_t crashAddr, int signo, const char* instr, const char description[HF_STR_LEN]) {
     util_ssnprintf(run->report, sizeof(run->report), "CRASH:\n");
     util_ssnprintf(run->report, sizeof(run->report), "DESCRIPTION: %s\n", description);
-    util_ssnprintf(run->report, sizeof(run->report), "ORIG_FNAME: %s\n", run->origFileName);
+    util_ssnprintf(run->report, sizeof(run->report), "ORIG_FNAME: %s\n", run->dynfile->path);
     util_ssnprintf(run->report, sizeof(run->report), "FUZZ_FNAME: %s\n", run->crashFileName);
     util_ssnprintf(run->report, sizeof(run->report), "PID: %d\n", pid);
     util_ssnprintf(
@@ -146,8 +146,7 @@ void report_appendReport(pid_t pid, run_t* run, funcs_t* funcs, size_t funcCnt, 
         run->report, sizeof(run->report), "STACK HASH: %016" PRIx64 "\n", run->backtrace);
     util_ssnprintf(run->report, sizeof(run->report), "STACK:\n");
     for (size_t i = 0; i < funcCnt; i++) {
-        util_ssnprintf(
-            run->report, sizeof(run->report), " <0x%016" PRIx64 "> ", (uint64_t)funcs[i].pc);
+        util_ssnprintf(run->report, sizeof(run->report), " <0x%016tx> ", (uintptr_t)funcs[i].pc);
         util_ssnprintf(run->report, sizeof(run->report), "[func:%s file:%s line:%zu module:%s]\n",
             funcs[i].func, funcs[i].file, funcs[i].line, funcs[i].module);
     }

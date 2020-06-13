@@ -21,40 +21,37 @@
  *
  */
 
-#define _WITH_DPRINTF
-
 #include "display.h"
 
 #include <errno.h>
 #include <inttypes.h>
-#include <math.h>
 #include <stdarg.h>
+#include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "libhfcommon/common.h"
 #include "libhfcommon/log.h"
 #include "libhfcommon/util.h"
 
-#define ESC_CLEAR_ALL "\033[2J"
-#define ESC_CLEAR_LINE "\033[2K"
-#define ESC_CLEAR_ABOVE "\033[1J"
-#define ESC_TERM_RESET "\033c"
-#define ESC_NAV(x, y) "\033[" #x ";" #y "H"
-#define ESC_BOLD "\033[1m"
-#define ESC_RED "\033[31m"
-#define ESC_RESET "\033[0m"
+#define ESC_CLEAR_ALL           "\033[2J"
+#define ESC_CLEAR_LINE          "\033[2K"
+#define ESC_CLEAR_ABOVE         "\033[1J"
+#define ESC_TERM_RESET          "\033c"
+#define ESC_NAV(x, y)           "\033[" #x ";" #y "H"
+#define ESC_BOLD                "\033[1m"
+#define ESC_RED                 "\033[31m"
+#define ESC_RESET               "\033[0m"
 #define ESC_SCROLL_REGION(x, y) "\033[" #x ";" #y "r"
-#define ESC_SCROLL_DISABLE "\033[?7h"
-#define ESC_SCROLL_RESET "\033[r"
-#define ESC_NAV_DOWN(x) "\033[" #x "B"
-#define ESC_NAV_HORIZ(x) "\033[" #x "G"
-#define ESC_RESET_SETTINGS "\033[!p"
-
-/* printf() nonmonetary separator. According to MacOSX's man it's supported there as well */
-#define _HF_NONMON_SEP "'"
+#define ESC_SCROLL_DISABLE      "\033[?7h"
+#define ESC_SCROLL_RESET        "\033[r"
+#define ESC_NAV_DOWN(x)         "\033[" #x "B"
+#define ESC_NAV_HORIZ(x)        "\033[" #x "G"
+#define ESC_RESET_SETTINGS      "\033[!p"
 
 static char displayBuf[1024 * 1024];
 static void display_start(void) {
@@ -72,6 +69,10 @@ __attribute__((format(printf, 1, 2))) static void display_put(const char* fmt, .
     va_end(args);
 }
 
+static void display_imm(const char* str) {
+    TEMP_FAILURE_RETRY(write(logFd(), str, strlen(str)));
+}
+
 static void display_printKMG(uint64_t val) {
     if (val >= 1000000000000ULL) {
         display_put(" [%.02LfT]", (long double)val / 1000000000.0L);
@@ -85,10 +86,10 @@ static void display_printKMG(uint64_t val) {
 }
 
 static unsigned getCpuUse(int numCpus) {
-    static uint64_t prevUserT = 0UL;
-    static uint64_t prevNiceT = 0UL;
+    static uint64_t prevUserT   = 0UL;
+    static uint64_t prevNiceT   = 0UL;
     static uint64_t prevSystemT = 0UL;
-    static uint64_t prevIdleT = 0UL;
+    static uint64_t prevIdleT   = 0UL;
 
     FILE* f = fopen("/proc/stat", "re");
     if (f == NULL) {
@@ -104,15 +105,15 @@ static unsigned getCpuUse(int numCpus) {
         return 0;
     }
 
-    uint64_t userCycles = (userT - prevUserT);
-    uint64_t niceCycles = (niceT - prevNiceT);
+    uint64_t userCycles   = (userT - prevUserT);
+    uint64_t niceCycles   = (niceT - prevNiceT);
     uint64_t systemCycles = (systemT - prevSystemT);
-    uint64_t idleCycles = (idleT - prevIdleT);
+    uint64_t idleCycles   = (idleT - prevIdleT);
 
-    prevUserT = userT;
-    prevNiceT = niceT;
+    prevUserT   = userT;
+    prevNiceT   = niceT;
     prevSystemT = systemT;
-    prevIdleT = idleT;
+    prevIdleT   = idleT;
 
     uint64_t allCycles = userCycles + niceCycles + systemCycles + idleCycles;
     if (allCycles == 0) {
@@ -129,11 +130,11 @@ static void getDuration(time_t elapsed_second, char* buf, size_t bufSz) {
     }
 
     unsigned int day, hour, min, second;
-    day = elapsed_second / 24 / 3600;
+    day            = elapsed_second / 24 / 3600;
     elapsed_second = elapsed_second - day * 24 * 3600;
-    hour = elapsed_second / 3600;
-    min = (elapsed_second - 3600 * hour) / 60;
-    second = elapsed_second - hour * 3600 - min * 60;
+    hour           = elapsed_second / 3600;
+    min            = (elapsed_second - 3600 * hour) / 60;
+    second         = elapsed_second - hour * 3600 - min * 60;
     snprintf(buf, bufSz, "%u days %02u hrs %02u mins %02u secs", day, hour, min, second);
 }
 
@@ -161,15 +162,15 @@ void display_createTargetStr(honggfuzz_t* hfuzz) {
 }
 
 void display_display(honggfuzz_t* hfuzz) {
-    if (logIsTTY() == false) {
+    if (!logIsTTY()) {
         return;
     }
 
-    const time_t curr_sec = time(NULL);
-    const time_t elapsed_sec = curr_sec - hfuzz->timing.timeStart;
-    const int64_t curr_time_millis = util_timeNowMillis();
-    const int64_t elapsed_millis = curr_time_millis - hfuzz->display.lastDisplayMillis;
-    hfuzz->display.lastDisplayMillis = curr_time_millis;
+    const time_t  curr_sec          = time(NULL);
+    const time_t  elapsed_sec       = curr_sec - hfuzz->timing.timeStart;
+    const int64_t curr_time_usecs   = util_timeNowUSecs();
+    const int64_t elapsed_usecs     = curr_time_usecs - hfuzz->display.lastDisplayUSecs;
+    hfuzz->display.lastDisplayUSecs = curr_time_usecs;
 
     char lastCovStr[64];
     getDuration(curr_sec - ATOMIC_GET(hfuzz->timing.lastCovUpdate), lastCovStr, sizeof(lastCovStr));
@@ -196,8 +197,8 @@ void display_display(honggfuzz_t* hfuzz) {
     }
 
     static size_t prev_exec_cnt = 0UL;
-    size_t exec_per_millis =
-        elapsed_millis ? ((curr_exec_cnt - prev_exec_cnt) * 1000) / elapsed_millis : 0;
+    size_t        exec_per_usecs =
+        elapsed_usecs ? ((curr_exec_cnt - prev_exec_cnt) * 1000000) / elapsed_usecs : 0;
     prev_exec_cnt = curr_exec_cnt;
 
     display_start();
@@ -218,9 +219,12 @@ void display_display(honggfuzz_t* hfuzz) {
         case _HF_STATE_DYNAMIC_DRY_RUN: {
             if (ATOMIC_GET(hfuzz->cfg.switchingToFDM)) {
                 display_put("\n  Mode [2/3] : " ESC_BOLD
-                            "Switching to the Feedback Driven Mode" ESC_RESET "\n");
+                            "Switching to the Feedback Driven Mode" ESC_RESET " [%zu/%zu]\n",
+                    hfuzz->io.testedFileCnt, hfuzz->io.fileCnt);
             } else {
-                display_put("\n  Mode [1/3] : " ESC_BOLD "Feedback Driven Dry Run" ESC_RESET "\n");
+                display_put("\n  Mode [1/3] : " ESC_BOLD "Feedback Driven Dry Run" ESC_RESET
+                            " [%zu/%zu]\n",
+                    hfuzz->io.testedFileCnt, hfuzz->io.fileCnt);
             }
         } break;
         case _HF_STATE_DYNAMIC_MAIN:
@@ -250,7 +254,7 @@ void display_display(honggfuzz_t* hfuzz) {
     size_t tot_exec_per_sec = elapsed_sec ? (curr_exec_cnt / elapsed_sec) : 0;
     display_put("       Speed : " ESC_BOLD "%" _HF_NONMON_SEP "zu" ESC_RESET "/sec [avg: " ESC_BOLD
                 "%" _HF_NONMON_SEP "zu" ESC_RESET "]\n",
-        exec_per_millis, tot_exec_per_sec);
+        exec_per_usecs, tot_exec_per_sec);
 
     uint64_t crashesCnt = ATOMIC_GET(hfuzz->cnts.crashesCnt);
     /* colored the crash count as red when exist crash */
@@ -266,7 +270,7 @@ void display_display(honggfuzz_t* hfuzz) {
     display_put(" Corpus Size : " ESC_BOLD "%" _HF_NONMON_SEP "zu" ESC_RESET ", max: " ESC_BOLD
                 "%" _HF_NONMON_SEP "zu" ESC_RESET " bytes, init: " ESC_BOLD "%" _HF_NONMON_SEP
                 "zu" ESC_RESET " files\n",
-        hfuzz->io.dynfileqCnt, hfuzz->mutate.maxFileSz, ATOMIC_GET(hfuzz->io.fileCnt));
+        hfuzz->io.dynfileqCnt, hfuzz->mutate.maxInputSz, ATOMIC_GET(hfuzz->io.fileCnt));
     display_put("  Cov Update : " ESC_BOLD "%s" ESC_RESET " ago\n" ESC_RESET, lastCovStr);
     display_put("    Coverage :");
 
@@ -276,27 +280,27 @@ void display_display(honggfuzz_t* hfuzz) {
     }
     if (hfuzz->feedback.dynFileMethod & _HF_DYNFILE_INSTR_COUNT) {
         display_put(" hwi: " ESC_BOLD "%" _HF_NONMON_SEP PRIu64 ESC_RESET,
-            ATOMIC_GET(hfuzz->linux.hwCnts.cpuInstrCnt));
+            ATOMIC_GET(hfuzz->feedback.hwCnts.cpuInstrCnt));
     }
     if (hfuzz->feedback.dynFileMethod & _HF_DYNFILE_BRANCH_COUNT) {
         display_put(" hwb: " ESC_BOLD "%" _HF_NONMON_SEP PRIu64 ESC_RESET,
-            ATOMIC_GET(hfuzz->linux.hwCnts.cpuBranchCnt));
+            ATOMIC_GET(hfuzz->feedback.hwCnts.cpuBranchCnt));
     }
     if (hfuzz->feedback.dynFileMethod & _HF_DYNFILE_BTS_EDGE) {
         display_put(" bts: " ESC_BOLD "%" _HF_NONMON_SEP PRIu64 ESC_RESET,
-            ATOMIC_GET(hfuzz->linux.hwCnts.bbCnt));
+            ATOMIC_GET(hfuzz->feedback.hwCnts.bbCnt));
     }
     if (hfuzz->feedback.dynFileMethod & _HF_DYNFILE_IPT_BLOCK) {
         display_put(" ipt: " ESC_BOLD "%" _HF_NONMON_SEP PRIu64 ESC_RESET,
-            ATOMIC_GET(hfuzz->linux.hwCnts.bbCnt));
+            ATOMIC_GET(hfuzz->feedback.hwCnts.bbCnt));
     }
     if (hfuzz->feedback.dynFileMethod & _HF_DYNFILE_SOFT) {
-        uint64_t softCntPc = ATOMIC_GET(hfuzz->linux.hwCnts.softCntPc);
-        uint64_t softCntEdge = ATOMIC_GET(hfuzz->linux.hwCnts.softCntEdge);
-        uint64_t softCntCmp = ATOMIC_GET(hfuzz->linux.hwCnts.softCntCmp);
-        uint64_t guardNb = ATOMIC_GET(hfuzz->feedback.feedbackMap->guardNb);
+        uint64_t softCntPc   = ATOMIC_GET(hfuzz->feedback.hwCnts.softCntPc);
+        uint64_t softCntEdge = ATOMIC_GET(hfuzz->feedback.hwCnts.softCntEdge);
+        uint64_t softCntCmp  = ATOMIC_GET(hfuzz->feedback.hwCnts.softCntCmp);
+        uint64_t guardNb     = ATOMIC_GET(hfuzz->feedback.covFeedbackMap->guardNb);
         display_put(" edge: " ESC_BOLD "%" _HF_NONMON_SEP PRIu64 ESC_RESET "/"
-                    "%" _HF_NONMON_SEP PRIu64 " [%" PRId64 "%%]",
+                    "%" _HF_NONMON_SEP                           PRIu64 " [%" PRId64 "%%]",
             softCntEdge, guardNb, guardNb ? ((softCntEdge * 100) / guardNb) : 0);
         display_put(" pc: " ESC_BOLD "%" _HF_NONMON_SEP PRIu64 ESC_RESET, softCntPc);
         display_put(" cmp: " ESC_BOLD "%" _HF_NONMON_SEP PRIu64 ESC_RESET, softCntCmp);
@@ -311,13 +315,13 @@ void display_display(honggfuzz_t* hfuzz) {
     display_stop();
 }
 
-void display_fini(void) {
-    display_put(ESC_SCROLL_RESET ESC_NAV_DOWN(500));
+static void display_fini(void) {
+    display_imm(ESC_SCROLL_RESET ESC_NAV_DOWN(500));
 }
 
 void display_clear(void) {
-    display_put(ESC_CLEAR_ALL);
-    display_put(ESC_NAV_DOWN(500));
+    display_imm(ESC_CLEAR_ALL);
+    display_imm(ESC_NAV_DOWN(500));
 }
 
 void display_init(void) {

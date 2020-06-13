@@ -20,10 +20,12 @@
 
 #define ARGS_MAX 4096
 
-static bool isCXX = false;
-static bool isGCC = false;
+static bool isCXX                     = false;
+static bool isGCC                     = false;
+static bool usePCGuard                = true;
+static bool hasCmdLineFSanitizeFuzzer = false;
 
-/* Embed libhfuzz.a inside this binary */
+/* Embed libhf/.a inside this binary */
 __asm__("\n"
         "   .global lhfuzz_start\n"
         "   .global lhfuzz_end\n"
@@ -107,7 +109,7 @@ static bool isLDMode(int argc, char** argv) {
     return true;
 }
 
-static bool isFSanitizeFuzzer(int argc, char** argv) {
+static bool hasFSanitizeFuzzer(int argc, char** argv) {
     for (int i = 1; i < argc; i++) {
         if (util_strStartsWith(argv[i], "-fsanitize=") && strstr(argv[i], "fuzzer")) {
             return true;
@@ -158,38 +160,42 @@ static int execCC(int argc, char** argv) {
         }
     } else {
         if (isCXX) {
-            /* Try the default one, then newest ones (hopefully) first */
+            /* Try the default one, then the newest ones (hopefully) in order */
             hf_execvp("clang++", argv);
-            hf_execvp("clang++-devel", argv);
+            hf_execvp("clang++-11.0", argv);
+            hf_execvp("clang++-11", argv);
+            hf_execvp("clang++11", argv);
             hf_execvp("clang++-10.0", argv);
             hf_execvp("clang++-10", argv);
+            hf_execvp("clang++10", argv);
             hf_execvp("clang++-9.0", argv);
             hf_execvp("clang++-9", argv);
+            hf_execvp("clang++9", argv);
             hf_execvp("clang++-8.0", argv);
             hf_execvp("clang++-8", argv);
+            hf_execvp("clang++8", argv);
             hf_execvp("clang++-7.0", argv);
             hf_execvp("clang++-7", argv);
-            hf_execvp("clang++-6.0", argv);
-            hf_execvp("clang++-6", argv);
-            hf_execvp("clang++-5.0", argv);
-            hf_execvp("clang++-5", argv);
+            hf_execvp("clang++7", argv);
             hf_execvp("clang", argv);
         } else {
-            /* Try the default one, then newest ones (hopefully) first */
+            /* Try the default one, then the newest ones (hopefully) in order */
             hf_execvp("clang", argv);
-            hf_execvp("clang-devel", argv);
+            hf_execvp("clang-11.0", argv);
+            hf_execvp("clang-11", argv);
+            hf_execvp("clang11", argv);
             hf_execvp("clang-10.0", argv);
             hf_execvp("clang-10", argv);
+            hf_execvp("clang10", argv);
             hf_execvp("clang-9.0", argv);
             hf_execvp("clang-9", argv);
+            hf_execvp("clang9", argv);
             hf_execvp("clang-8.0", argv);
             hf_execvp("clang-8", argv);
+            hf_execvp("clang8", argv);
             hf_execvp("clang-7.0", argv);
             hf_execvp("clang-7", argv);
-            hf_execvp("clang-6.0", argv);
-            hf_execvp("clang-6", argv);
-            hf_execvp("clang-5.0", argv);
-            hf_execvp("clang-5", argv);
+            hf_execvp("clang7", argv);
         }
     }
 
@@ -200,7 +206,7 @@ static int execCC(int argc, char** argv) {
 /* It'll point back to the libhfuzz's source tree */
 char* getIncPaths(void) {
 #if !defined(_HFUZZ_INC_PATH)
-#error \
+#error                                                                                             \
     "You need to define _HFUZZ_INC_PATH to a directory with the directory called 'includes', containing honggfuzz's lib* includes. Typically it'd be the build/sources dir"
 #endif
 
@@ -217,8 +223,8 @@ static bool getLibPath(
         return true;
     }
 
-    ptrdiff_t len = (uintptr_t)end - (uintptr_t)start;
-    uint64_t crc64 = util_CRC64(start, len);
+    ptrdiff_t len   = (uintptr_t)end - (uintptr_t)start;
+    uint64_t  crc64 = util_CRC64(start, len);
     snprintf(path, PATH_MAX, "/tmp/%s.%d.%" PRIx64 ".a", name, geteuid(), crc64);
 
     /* Does the library exist, belongs to the user, and is of expected size? */
@@ -229,7 +235,7 @@ static bool getLibPath(
 
     /* If not, create it with atomic rename() */
     char template[] = "/tmp/lib.honggfuzz.a.XXXXXX";
-    int fd = TEMP_FAILURE_RETRY(mkostemp(template, O_CLOEXEC));
+    int fd          = TEMP_FAILURE_RETRY(mkostemp(template, O_CLOEXEC));
     if (fd == -1) {
         PLOG_E("mkostemp('%s')", template);
         return false;
@@ -296,28 +302,23 @@ static char* getLibHFCommonPath() {
     return path;
 }
 
-static void commonOpts(int* j, char** args) {
+static void commonPreOpts(int* j, char** args) {
     args[(*j)++] = getIncPaths();
-    if (isGCC) {
-        if (useBelowGCC8()) {
-            /* trace-pc is the best that gcc-6/7 currently offers */
-            args[(*j)++] = "-fsanitize-coverage=trace-pc";
-        } else {
-            /* gcc-8+ offers trace-cmp as well, but it's not that widely used yet */
-            args[(*j)++] = "-fsanitize-coverage=trace-pc,trace-cmp";
-        }
-    } else {
+
+    if (!isGCC) {
         args[(*j)++] = "-Wno-unused-command-line-argument";
-        args[(*j)++] = "-fsanitize-coverage=trace-pc-guard,trace-cmp,trace-div,indirect-calls";
-        args[(*j)++] = "-mllvm";
-        args[(*j)++] = "-sanitizer-coverage-prune-blocks=1";
     }
 
     /*
      * Make the execution flow more explicit, allowing for more code blocks
      * (and better code coverage estimates)
      */
-    args[(*j)++] = "-fno-inline";
+    if (isGCC) {
+        args[(*j)++] = "-finline-limit=4000";
+    } else {
+        args[(*j)++] = "-mllvm";
+        args[(*j)++] = "-inline-threshold=2000";
+    }
     args[(*j)++] = "-fno-builtin";
     args[(*j)++] = "-fno-omit-frame-pointer";
     args[(*j)++] = "-D__NO_STRING_INLINES";
@@ -339,6 +340,31 @@ static void commonOpts(int* j, char** args) {
     }
 }
 
+static void commonPostOpts(int* j, char** args) {
+    if (isGCC) {
+        if (useBelowGCC8()) {
+            /* trace-pc is the best that gcc-6/7 currently offers */
+            args[(*j)++] = "-fsanitize-coverage=trace-pc";
+        } else {
+            /* gcc-8+ offers trace-cmp as well, but it's not that widely used yet */
+            args[(*j)++] = "-fsanitize-coverage=trace-pc,trace-cmp";
+        }
+    } else {
+        if (usePCGuard) {
+            if (hasCmdLineFSanitizeFuzzer) {
+                args[(*j)++] = "-fno-sanitize=fuzzer";
+                args[(*j)++] = "-fno-sanitize=fuzzer-no-link";
+            }
+            args[(*j)++] = "-fsanitize-coverage=trace-pc-guard,trace-cmp,trace-div,indirect-calls";
+        } else {
+            args[(*j)++] = "-fno-sanitize-coverage=trace-pc-guard";
+            args[(*j)++] = "-fno-sanitize=fuzzer";
+            args[(*j)++] = "-fsanitize=fuzzer-no-link";
+            args[(*j)++] = "-fsanitize-coverage=trace-cmp,trace-div,indirect-calls";
+        }
+    }
+}
+
 static int ccMode(int argc, char** argv) {
     char* args[ARGS_MAX];
 
@@ -349,16 +375,13 @@ static int ccMode(int argc, char** argv) {
         args[j++] = "cc";
     }
 
-    commonOpts(&j, args);
+    commonPreOpts(&j, args);
 
     for (int i = 1; i < argc; i++) {
         args[j++] = argv[i];
     }
 
-    /* Disable -fsanitize=fuzzer */
-    if (isFSanitizeFuzzer(argc, argv)) {
-        args[j++] = "-fno-sanitize=fuzzer";
-    }
+    commonPostOpts(&j, args);
 
     return execCC(j, args);
 }
@@ -373,34 +396,36 @@ static int ldMode(int argc, char** argv) {
         args[j++] = "cc";
     }
 
-    commonOpts(&j, args);
+    commonPreOpts(&j, args);
 
 /* MacOS X linker doesn't like those */
 #ifndef _HF_ARCH_DARWIN
     /* Intercept common *cmp functions */
     args[j++] = "-Wl,--wrap=strcmp";
     args[j++] = "-Wl,--wrap=strcasecmp";
+    args[j++] = "-Wl,--wrap=stricmp";
     args[j++] = "-Wl,--wrap=strncmp";
     args[j++] = "-Wl,--wrap=strncasecmp";
+    args[j++] = "-Wl,--wrap=strnicmp";
     args[j++] = "-Wl,--wrap=strstr";
     args[j++] = "-Wl,--wrap=strcasestr";
     args[j++] = "-Wl,--wrap=memcmp";
     args[j++] = "-Wl,--wrap=bcmp";
     args[j++] = "-Wl,--wrap=memmem";
     args[j++] = "-Wl,--wrap=strcpy";
-    /* Apache's httpd mem/str cmp functions */
+    /* Apache httpd */
     args[j++] = "-Wl,--wrap=ap_cstr_casecmp";
     args[j++] = "-Wl,--wrap=ap_cstr_casecmpn";
     args[j++] = "-Wl,--wrap=ap_strcasestr";
     args[j++] = "-Wl,--wrap=apr_cstr_casecmp";
     args[j++] = "-Wl,--wrap=apr_cstr_casecmpn";
-    /* Frequently used time-constant *SSL functions */
+    /* *SSL */
     args[j++] = "-Wl,--wrap=CRYPTO_memcmp";
     args[j++] = "-Wl,--wrap=OPENSSL_memcmp";
     args[j++] = "-Wl,--wrap=OPENSSL_strcasecmp";
     args[j++] = "-Wl,--wrap=OPENSSL_strncasecmp";
     args[j++] = "-Wl,--wrap=memcmpct";
-    /* Frequently used libXML2 functions */
+    /* libXML2 */
     args[j++] = "-Wl,--wrap=xmlStrncmp";
     args[j++] = "-Wl,--wrap=xmlStrcmp";
     args[j++] = "-Wl,--wrap=xmlStrEqual";
@@ -408,9 +433,26 @@ static int ldMode(int argc, char** argv) {
     args[j++] = "-Wl,--wrap=xmlStrncasecmp";
     args[j++] = "-Wl,--wrap=xmlStrstr";
     args[j++] = "-Wl,--wrap=xmlStrcasestr";
-    /* Some Samba functions */
+    /* Samba */
     args[j++] = "-Wl,--wrap=memcmp_const_time";
     args[j++] = "-Wl,--wrap=strcsequal";
+    /* LittleCMS */
+    args[j++] = "-Wl,--wrap=cmsstrcasecmp";
+    /* GLib */
+    args[j++] = "-Wl,--wrap=g_strcmp0";
+    args[j++] = "-Wl,--wrap=g_strcasecmp";
+    args[j++] = "-Wl,--wrap=g_strncasecmp";
+    args[j++] = "-Wl,--wrap=g_strstr_len";
+    args[j++] = "-Wl,--wrap=g_ascii_strcasecmp";
+    args[j++] = "-Wl,--wrap=g_ascii_strncasecmp";
+    args[j++] = "-Wl,--wrap=g_str_has_prefix";
+    args[j++] = "-Wl,--wrap=g_str_has_suffix";
+    /* CUrl */
+    args[j++] = "-Wl,--wrap=Curl_strcasecompare";
+    args[j++] = "-Wl,--wrap=curl_strequal";
+    args[j++] = "-Wl,--wrap=Curl_safe_strcasecompare";
+    args[j++] = "-Wl,--wrap=Curl_strncasecompare";
+    args[j++] = "-Wl,--wrap=curl_strnequal";
 #endif /* _HF_ARCH_DARWIN */
 
     /* Pull modules defining the following symbols (if they exist) */
@@ -428,14 +470,16 @@ static int ldMode(int argc, char** argv) {
         args[j++] = argv[i];
     }
 
-    /* Reference standard honggfuzz libraries (libhfuzz and libhfnetdriver) */
+    /* Reference standard honggfuzz libraries first (libhfuzz, libhfcommon and libhfnetdriver) */
     args[j++] = getLibHFNetDriverPath();
     args[j++] = getLibHFuzzPath();
     args[j++] = getLibHFCommonPath();
 
-    /* Needed by the libhfcommon */
+    /* Needed by libhfcommon */
     args[j++] = "-pthread";
+#if !defined(__NetBSD__)
     args[j++] = "-ldl";
+#endif /* !defined(__NetBSD__) */
 #if !defined(_HF_ARCH_DARWIN) && !defined(__OpenBSD__)
     args[j++] = "-lrt";
 #endif /* !defined(_HF_ARCH_DARWIN) && !defined(__OpenBSD__) */
@@ -443,10 +487,7 @@ static int ldMode(int argc, char** argv) {
     args[j++] = "-latomic";
 #endif
 
-    /* Disable -fsanitize=fuzzer */
-    if (isFSanitizeFuzzer(argc, argv)) {
-        args[j++] = "-fno-sanitize=fuzzer";
-    }
+    commonPostOpts(&j, args);
 
     return execCC(j, args);
 }
@@ -468,6 +509,14 @@ int main(int argc, char** argv) {
     if (baseNameContains(argv[0], "-g++")) {
         isGCC = true;
     }
+    if (baseNameContains(argv[0], "-pcguard-")) {
+        usePCGuard = true;
+    }
+    if (baseNameContains(argv[0], "-8bitcnt-")) {
+        usePCGuard = false;
+    }
+    hasCmdLineFSanitizeFuzzer = hasFSanitizeFuzzer(argc, argv);
+
     if (argc <= 1) {
         return execCC(argc, argv);
     }
