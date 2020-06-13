@@ -1,4 +1,4 @@
-FROM i386/ubuntu
+FROM ubuntu
 
 RUN apt-get -y update && apt-get install -y \
 build-essential zlib1g-dev pkg-config libglib2.0-dev binutils-dev libboost-all-dev autoconf libtool libssl-dev libpixman-1-dev libpython-dev python-pip python-capstone virtualenv \
@@ -16,12 +16,13 @@ build-essential zlib1g-dev pkg-config libglib2.0-dev binutils-dev libboost-all-d
 	    libglib2.0-dev-bin \
 	    && rm -rf /var/lib/apt/lists/* && rm -rf /honggfuzz
 
-RUN git clone -n --depth=1 https://github.com/skirge/honggfuzz.git
+RUN git clone -n --depth=1 https://github.com/skirge/honggfuzz.git && \
+	cd /honggfuzz && \
+	git checkout 956d022474310f6150165633745d302f8841f289
 
 WORKDIR /honggfuzz
 
-RUN	git checkout && \
-	make && \
+RUN	make && \
 	make install  && \
 	cd qemu_mode && \
 	make && \
